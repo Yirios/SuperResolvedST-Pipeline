@@ -52,40 +52,42 @@ class SRresult:
                 mask.astype(np.uint8), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
             )
             x, y, _, _ = cv.boundingRect(np.concatenate(contour))
-            return (x,y)
+            return y,x
         
         # read scale factor
         with open(self.prefix/"scale.txt") as f:
             scale = float(f.read())
+        
+        # select genes
+        with open(self.prefix/'gene-names.txt', 'r') as file:
+            genes = [line.rstrip() for line in file]
+
         # rebuild mask
         mask = Image.open(self.prefix/"mask.png")
         mask = mask.resize([round(x * scale) for x in mask.size], resample=Image.NEAREST)
         mask = np.array(mask)[1:-1, 1:-1]
-        rect = find_min_bbox(mask)
+        x0,y0 = find_min_bbox(mask)
         
         with h5py.File(self.prefix/"data/data.h5", "r") as f:
             buildin_mask = np.where(f["label"][:]==1,1,0).astype("int8")
         
-        mask = np.pad(buildin_mask,
-                      pad_width=(
-                          (rect[1],mask.shape[0]-buildin_mask.shape[0]-rect[1]),
-                          (rect[0],mask.shape[1]-buildin_mask.shape[1]-rect[0])
-                      ),
-                      mode='constant', constant_values=1)
-        # select genes
-        with open(self.prefix/'gene-names.txt', 'r') as file:
-            genes = [line.rstrip() for line in file]
+        # mask = np.pad(buildin_mask,
+        #               pad_width=(
+        #                   (rect[1],mask.shape[0]-buildin_mask.shape[0]-rect[1]),
+        #                   (rect[0],mask.shape[1]-buildin_mask.shape[1]-rect[0])
+        #               ),
+        #               mode='constant', constant_values=1)
+
         # select unmasked super pixel 
-        Xs,Ys = np.where(mask==0)
+        Xs,Ys = np.where(buildin_mask==0)
         self.image_shape = mask.shape[:2]
-        data = {"x":Xs, "y":Ys}
-        # genes = ["HES4","VWA1","AL645728.1","GABRD"] # test genes
+        data = {"x":Xs+x0, "y":Ys+y0}
+        genes = ["HES4","VWA1","AL645728.1","GABRD"] # test genes
         for gene in genes:
             cnts = torch.load(self.prefix/f"result/analyses/final/gene_maps/section1/{gene}.pt")
             cnts = np.mean(cnts,axis=0)
             data[gene]=[float(f"{x:.8f}") for x in np.round(cnts[Xs, Ys], decimals=8)]
         self.data = pd.DataFrame(data)
-        # print(self.data)
         
     @timer
     def load_istar(self):
@@ -141,7 +143,7 @@ def main():
     # result.load_istar()
     result.load_xfuse()
     # result.to_csv()
-    # result.to_h5ad()
+    result.to_h5ad()
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,8 @@
 
 prefix=$1
-config_file="/home/yiriso/Research/Super-resolvedST/xfuse/my-config.toml"
+config_file="xfuse/my-config.toml"
 pixel_size=8 # 超分辨后的像素边长（微米）
 device=0 # 选择 GPU [0,1,2,3] 
-
-# python preprocess_for_xfuse.py --prefix ${prefix} --genes /home/yiriso/Research/Super-resolvedST/istar/istar-master/result-DLPFC/gene-names.txt ${prefix}
 
 # D=$(jq .spot_diameter_fullres ${prefix}/scalefactors_json.json)
 # scale_factor=$(jq .tissue_hires_scalef ${prefix}/scalefactors_json.json)
