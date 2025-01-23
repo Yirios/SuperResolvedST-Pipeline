@@ -263,7 +263,11 @@ class TESLAData(rawData):
         ii.imsave(self.prefix/"mask.png", mask)
         # save data.h5ad
         self.transfer_h5ad().write_h5ad(self.prefix/"data.h5ad")
-        
+
+class ImSpiRE(rawData):
+    
+    def convert(self):
+        pass
 
 def get_args():
     parser = argparse.ArgumentParser()

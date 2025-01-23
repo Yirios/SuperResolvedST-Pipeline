@@ -11,7 +11,7 @@ conda install conda-forge::cudatoolkit=11.7.1
 conda install cudnn=8.2.1 -c conda-forge
 conda install pytorch==1.13.0 torchvision==0.14.0 torchaudio==0.13.0 pytorch-cuda=11.7 -c pytorch -c nvidia
 ```
-2. Download xfuse. replace `pyproject.toml` and `xfuse/convert/utility.py`
+2. Download xfuse. Replace `pyproject.toml` and `xfuse/convert/utility.py`
 ```shell
 pip install .
 ```
