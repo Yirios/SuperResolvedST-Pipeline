@@ -25,7 +25,7 @@ def fast_to_csv(df: pd.DataFrame, file: Path, sep="\t") -> None:
         for _, row in df.iterrows():
             f.write(sep.join(map(str, row)) + "\n")
 
-def write_10X_h5(adata, file:Path) -> None:
+def write_10X_h5(adata, file:Path, metadata={}) -> None:
     """Writes an AnnData object to a 10X Genomics formatted HDF5 file.
     
     This function creates a file compatible with Seurat's Read10X_h5 function. 
@@ -52,8 +52,12 @@ def write_10X_h5(adata, file:Path) -> None:
     X = adata.X.T
     # Create file and write data
     with h5py.File(file, 'w') as w:
+
+        for key, value in metadata.items():
+            w.attrs[key] = value
+
         grp = w.create_group("matrix")
-        #
+
         grp.create_dataset("data", data=X.data, dtype=np.float32)
         grp.create_dataset("indices", data=X.indices, dtype=np.int32)
         grp.create_dataset("indptr", data=X.indptr, dtype=np.int32)
@@ -114,6 +118,8 @@ class rawData:
         file = self.path/"filtered_feature_bc_matrix.h5"
         self.adata = sc.read_10x_h5(file)
         self.adata.var_names_make_unique()
+        with h5py.File(file, mode="r") as f:
+            self.metadata = dict(f.attrs)
         sc.pp.filter_genes(self.adata, min_counts=10)
 
     def __read_mask(self, auto_mask=True) -> np.ndarray:
@@ -281,8 +287,17 @@ class TESLAData(rawData):
 
 class ImSpiREData(rawData):
     
-    def convert(self):
-        return super().convert()
+    def convert(self, image_index=0):
+        # save image.jpg
+        ii.imsave(self.prefix/"image.tif", self.images[self.mask2image[image_index][1]])
+        # save h5
+        write_10X_h5(self.adata, self.prefix/"filtered_feature_bc_matrix.h5", self.metadata)
+        # copy spatial folder
+        shutil.copytree(self.path / "spatial", self.prefix / "spatial")
+        # calculate patch size
+        with open(self.prefix/"patch_size.txt","w") as f:
+            scale = self.scaleF["tissue_hires_scalef"]*4/self.pixel_size
+            f.write(str(int(np.round(1/scale))))
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -297,14 +312,15 @@ def main():
     rawdata = Path(args.rawdata)
     # data = XfuseData(path=rawdata)
     # data = iStarData(path=rawdata)
-    data = TESLAData(path=rawdata, pixel_size=100)
+    # data = TESLAData(path=rawdata, pixel_size=100)
+    data = ImSpiREData(path=rawdata, pixel_size=100)
     data.select_HVG(n_top_genes=2000)
     if (rawdata/"gene_names.txt").exists():
         genes = pd.read_csv(rawdata/"gene_names.txt", sep='\t', header=0)
         data.require_genes(genes[0].values.tolist())
     # data.save(prefix/"xfuse")
     # data.save(prefix/"istar")
-    data.save(prefix/"TESLA")
+    data.save(prefix/"ImSpiRE")
 
 if __name__ == "__main__":
     main()

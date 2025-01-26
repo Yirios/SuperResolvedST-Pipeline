@@ -112,7 +112,25 @@ class SRresult:
         self.data = adata.to_df()
         self.data.insert(0, 'y', adata.obs["y_spuer"].astype(int))
         self.data.insert(0, 'x', adata.obs["x_spuer"].astype(int))
-        print(self.data)
+    
+    @timer
+    def load_ImSpiRE(self):
+        adata = read_h5ad(self.prefix/"result/result_ResolutionEnhancementResult.h5ad")
+        self.data = adata.to_df()
+        locDF = pd.read_csv(self.prefix/"result/result_PatchLocations.txt", sep="\t",)
+        locDF.columns = ['index', 'row', 'col', 'pxl_row', 'pxl_col', 'in_tissue']
+        self.data.index = self.data.index.astype(int)
+        with open(self.prefix/'patch_size.txt') as f:
+            patch_size = int(f.read())
+        locDF["x"] = np.floor(locDF["pxl_row"]/patch_size).astype(int)
+        locDF["y"] = np.floor(locDF["pxl_col"]/patch_size).astype(int)
+        self.data = pd.merge(locDF, self.data, left_index=True, right_index=True).iloc[:, 6:]
+
+        image = ii.imread(self.prefix/'image.tif')
+        self.image_shape = [
+            int(image.shape[0]/patch_size),
+            int(image.shape[1]/patch_size),
+        ]
 
     @timer
     def to_csv(self, file=None, sep="\t"):
@@ -147,8 +165,9 @@ def main():
     result = SRresult(prefix)
     # result.load_istar()
     # result.load_xfuse()
-    result.load_TESLA()
-    # result.to_csv()
+    # result.load_TESLA()
+    result.load_ImSpiRE()
+    result.to_csv()
     result.to_h5ad()
 
 if __name__ == "__main__":
