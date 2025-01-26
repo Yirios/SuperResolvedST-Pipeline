@@ -16,7 +16,7 @@ import h5py
 from PIL import Image
 
 import imageio.v2 as ii
-from anndata import AnnData
+from anndata import AnnData, read_h5ad
 
 def timer(func):
     @wraps(func)
@@ -107,7 +107,12 @@ class SRresult:
 
     @timer
     def load_TESLA(self):
-        pass
+        adata = read_h5ad(self.prefix/"enhanced_exp.h5ad")
+        self.image_shape = adata.uns["shape"]
+        self.data = adata.to_df()
+        self.data.insert(0, 'y', adata.obs["y_spuer"].astype(int))
+        self.data.insert(0, 'x', adata.obs["x_spuer"].astype(int))
+        print(self.data)
 
     @timer
     def to_csv(self, file=None, sep="\t"):
@@ -141,7 +146,8 @@ def main():
     prefix = Path(args.prefix)
     result = SRresult(prefix)
     # result.load_istar()
-    result.load_xfuse()
+    # result.load_xfuse()
+    result.load_TESLA()
     # result.to_csv()
     result.to_h5ad()
 

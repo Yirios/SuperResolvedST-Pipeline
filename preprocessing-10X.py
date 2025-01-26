@@ -12,6 +12,7 @@ import pandas as pd
 import h5py
 import scanpy as sc
 import imageio.v2 as ii
+from scipy.sparse import csr_matrix
 from anndata import AnnData
 
 import warnings
@@ -121,18 +122,27 @@ class rawData:
             if f.is_file() and f.suffix.lower() in rawData.image_extensions and 'mask' in f.name.lower()
         ]
         self.masks.sort(key=lambda i:np.sum(i.shape), reverse=True)
-        # find match image
+        # find matching image
         self.mask2image=[]
         if len(self.masks) != 0:
             for (i,image),(j,mask) in product(enumerate(self.images),enumerate(self.masks)):
                 if mask.shape[0] == image.shape[0] and mask.shape[1] == image.shape[1]:
                     self.mask2image.append((j,i))
-        elif auto_mask:
-            print("Can't find mask image, auto masking.")
-            self.masks.append(self.auto_mask(self.images[0]))
-            self.mask2image.append((0,0))
+            if len(self.mask2image) == 0:
+                if auto_mask:
+                    print("Can't find mask image, auto masking.")
+                    self.masks.insert(0,self.auto_mask(self.images[0]))
+                    self.mask2image.append((0,0))
+                else:
+                    raise ValueError("Can't find mask")
         else:
-            self.masks = []
+            if auto_mask:
+                print("Can't find mask image, auto masking.")
+                self.masks.append(self.auto_mask(self.images[0]))
+                self.mask2image.append((0,0))
+            else:
+                raise ValueError("Can't find mask")
+        
         return self.masks
 
     def auto_mask(self, img : np.ndarray,
@@ -152,7 +162,9 @@ class rawData:
             cnt_info.append((c,cv2.isContourConvex(c),cv2.contourArea(c),))
         cnt_info.sort(key=lambda c: c[2], reverse=True)
         cnt=cnt_info[0][0]
-        return cnt
+        mask = np.zeros(img.shape[:2], dtype=np.uint8)
+        cv2.drawContours(mask, [cnt], contourIdx=-1, color=255, thickness=-1)
+        return mask
 
     def select_HVG(self,n_top_genes=2000) -> None:
         sc.pp.highly_variable_genes(self.adata, n_top_genes=n_top_genes, subset=True, flavor='seurat_v3')
@@ -175,21 +187,18 @@ class rawData:
         self.prefix = prefix
         print("Start convert")
         # write selected gene names
-        if (self.path/"gene-names.txt").exists():
-            shutil.copy(self.path/"gene-names.txt",self.prefix/"gene-names.txt")
-        else:
-            with open(self.prefix/"gene-names.txt","w") as f:
-                f.write("\n".join(self.adata.var.index.values))
+        with open(self.prefix/"gene-names.txt","w") as f:
+            f.write("\n".join(self.adata.var.index.values))
         self.convert()
         print("Finish convert")
 
 class XfuseData(rawData):
 
-    def convert(self):
+    def convert(self, image_index=0):
         # save image.png
-        ii.imsave(self.prefix/"image.png", self.images[self.mask2image[0][1]])
+        ii.imsave(self.prefix/"image.png", self.images[self.mask2image[image_index][1]])
         # save mask.png
-        mask = self.masks[self.mask2image[0][0]] > 0
+        mask = self.masks[self.mask2image[image_index][0]] > 0
         mask = np.where(mask, cv2.GC_FGD, cv2.GC_BGD).astype(np.uint8)
         ii.imsave(self.prefix/"mask.png", mask)
         # save h5
@@ -219,11 +228,11 @@ class iStarData(rawData):
         mergedDF = pd.merge(locDF,cntDF, left_on='barcode', right_on='barcode', how='inner')
         return mergedDF.iloc[:, 5:]
 
-    def convert(self):
+    def convert(self, image_index=0):
         # save he-raw.jpg
-        ii.imsave(self.prefix/"he-raw.jpg", self.images[self.mask2image[0][1]])
+        ii.imsave(self.prefix/"he-raw.jpg", self.images[self.mask2image[image_index][1]])
         # save mask-raw.png
-        mask = self.masks[self.mask2image[0][0]]
+        mask = self.masks[self.mask2image[image_index][0]]
         ii.imsave(self.prefix/"mask-raw.png", mask)
         # wirte number of pixels per spot radius
         with open(self.prefix/"radius-raw.txt","w") as f:
@@ -232,6 +241,8 @@ class iStarData(rawData):
         with open(self.prefix/"pixel-size-raw.txt","w") as f:
             f.write(str(self.scaleF["tissue_hires_scalef"]*4))
             # f.write(str(65/scaleF["spot_diameter_fullres"]))
+        with open(self.prefix/"pixel-size.txt"):
+            f.write(str(self.pixel_size))
         # save spot locations
         locDF = self.transfer_loc()
         locDF[["spot","x","y"]].to_csv(self.prefix/"locs-raw.tsv", sep="\t", index=False)
@@ -255,19 +266,23 @@ class TESLAData(rawData):
         adata.obs = df
         return adata
 
-    def convert(self):
+    def convert(self, image_index=0):
         # save image.jpg
-        ii.imsave(self.prefix/"image.jpg", self.images[self.mask2image[0][1]])
+        ii.imsave(self.prefix/"image.jpg", self.images[self.mask2image[image_index][1]])
         # save mask.png
-        mask = self.masks[self.mask2image[0][0]]
-        ii.imsave(self.prefix/"mask.png", mask)
+        mask = self.masks[self.mask2image[image_index][0]]
+        ii.imsave(self.prefix/"mask.png", mask,)
         # save data.h5ad
         self.transfer_h5ad().write_h5ad(self.prefix/"data.h5ad")
+        # calculate super pixel step
+        with open(self.prefix/"pixel_step.txt","w") as f:
+            scale = self.scaleF["tissue_hires_scalef"]*4/self.pixel_size
+            f.write(str(int(np.round(1/scale))))
 
-class ImSpiRE(rawData):
+class ImSpiREData(rawData):
     
     def convert(self):
-        pass
+        return super().convert()
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -280,16 +295,16 @@ def main():
     args = get_args()
     prefix = Path(args.prefix)
     rawdata = Path(args.rawdata)
-    data = XfuseData(path=rawdata)
+    # data = XfuseData(path=rawdata)
     # data = iStarData(path=rawdata)
-    # data = TESLAData(path=rawdata)
+    data = TESLAData(path=rawdata, pixel_size=100)
     data.select_HVG(n_top_genes=2000)
     if (rawdata/"gene_names.txt").exists():
         genes = pd.read_csv(rawdata/"gene_names.txt", sep='\t', header=0)
         data.require_genes(genes[0].values.tolist())
-    data.save(prefix/"xfuse")
+    # data.save(prefix/"xfuse")
     # data.save(prefix/"istar")
-    # data.save(prefix/"TESLA")
+    data.save(prefix/"TESLA")
 
 if __name__ == "__main__":
     main()
