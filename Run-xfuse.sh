@@ -1,7 +1,6 @@
 
 prefix=$1
 config_file="xfuse/my-config.toml"
-pixel_size=8 # 超分辨后的像素边长（微米）
 device=0 # 选择 GPU [0,1,2,3] 
 
 # D=$(jq .spot_diameter_fullres ${prefix}/scalefactors_json.json)

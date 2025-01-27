@@ -84,7 +84,7 @@ class rawData:
     """
     """
     image_extensions = {'.jpg', '.png', '.tiff'}
-    def __init__(self,path:Path, pixel_size=8, auto_mask=True):
+    def __init__(self,path:Path, pixel_size=16, auto_mask=True):
         self.path = path
         self.prefix = None
         self.pixel_size=pixel_size
@@ -248,7 +248,7 @@ class iStarData(rawData):
             f.write(str(self.scaleF["tissue_hires_scalef"]*4))
             # f.write(str(65/scaleF["spot_diameter_fullres"]))
         with open(self.prefix/"pixel-size.txt"):
-            f.write(str(self.pixel_size))
+            f.write(str(self.pixel_size/16))
         # save spot locations
         locDF = self.transfer_loc()
         locDF[["spot","x","y"]].to_csv(self.prefix/"locs-raw.tsv", sep="\t", index=False)
