@@ -247,7 +247,7 @@ class iStarData(rawData):
         with open(self.prefix/"pixel-size-raw.txt","w") as f:
             f.write(str(self.scaleF["tissue_hires_scalef"]*4))
             # f.write(str(65/scaleF["spot_diameter_fullres"]))
-        with open(self.prefix/"pixel-size.txt"):
+        with open(self.prefix/"pixel-size.txt", "w") as f:
             f.write(str(self.pixel_size/16))
         # save spot locations
         locDF = self.transfer_loc()
@@ -312,14 +312,15 @@ def main():
     rawdata = Path(args.rawdata)
     # data = XfuseData(path=rawdata)
     # data = iStarData(path=rawdata)
-    # data = TESLAData(path=rawdata, pixel_size=100)
-    data = ImSpiREData(path=rawdata, pixel_size=100)
+    # data = TESLAData(path=rawdata)
+    data = ImSpiREData(path=rawdata)
     data.select_HVG(n_top_genes=2000)
     if (rawdata/"gene_names.txt").exists():
         genes = pd.read_csv(rawdata/"gene_names.txt", sep='\t', header=0)
         data.require_genes(genes[0].values.tolist())
     # data.save(prefix/"xfuse")
     # data.save(prefix/"istar")
+    # data.save(prefix/"TESLA")
     data.save(prefix/"ImSpiRE")
 
 if __name__ == "__main__":

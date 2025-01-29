@@ -6,6 +6,7 @@ prefix=$1  # e.g. data/demo/
 device="cuda"  # "cuda" or "cpu"
 n_genes=2000  # number of most variable genes to impute
 
+cd ../istar/istar-master/
 python rescale.py ${prefix} --image --mask
 python preprocess.py ${prefix} --image --mask
 

@@ -82,7 +82,7 @@ class SRresult:
         Xs,Ys = np.where(buildin_mask==0)
         self.image_shape = mask.shape[:2]
         data = {"x":Xs+x0, "y":Ys+y0}
-        genes = ["HES4","VWA1","AL645728.1","GABRD"] # test genes
+        # genes = ["HES4","VWA1","AL645728.1","GABRD"] # test genes
         for gene in genes:
             cnts = torch.load(self.prefix/f"result/analyses/final/gene_maps/section1/{gene}.pt")
             cnts = np.mean(cnts,axis=0)
@@ -164,10 +164,10 @@ def main():
     prefix = Path(args.prefix)
     result = SRresult(prefix)
     # result.load_istar()
-    # result.load_xfuse()
+    result.load_xfuse()
     # result.load_TESLA()
-    result.load_ImSpiRE()
-    result.to_csv()
+    # result.load_ImSpiRE()
+    # result.to_csv()
     result.to_h5ad()
 
 if __name__ == "__main__":
