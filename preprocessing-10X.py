@@ -26,7 +26,8 @@ def fast_to_csv(df: pd.DataFrame, file: Path, sep="\t") -> None:
             f.write(sep.join(map(str, row)) + "\n")
 
 def write_10X_h5(adata, file:Path, metadata={}) -> None:
-    """Writes an AnnData object to a 10X Genomics formatted HDF5 file.
+    """\
+    Writes an AnnData object to a 10X Genomics formatted HDF5 file.
     
     This function creates a file compatible with Seurat's Read10X_h5 function. 
     It writes the sparse matrix data and associated metadata while ensuring correct data types and attributes.
