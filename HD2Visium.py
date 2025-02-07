@@ -198,8 +198,8 @@ class VisiumProfile:
         -------
         tuple of (array_row:int, array_col:int)
         """
-        array_row = id//(self.row_range*2)
-        array_col = 2 * (id%self.row_range) - array_row%2
+        array_row = id//self.row_range
+        array_col = 2 * (id%self.row_range) + array_row%2
         return array_row, array_col
 
 class VisiumHDProfile:
@@ -472,7 +472,7 @@ class VisiumHDData:
         X_indptr = np.zeros(len(profile)+1)
         X_indices = np.zeros(0)
         X_data = np.zeros(0)
-        spot_in_tissue = np.zeros(len(profile))
+        spot_in_tissue = np.zeros(len(profile), dtype=int)
         
         mask_in_tissue = self.locDF["in_tissue"] == 1
         for id in range(len(profile)):
@@ -491,9 +491,10 @@ class VisiumHDData:
             if id%100==0: print(id)
         
         tissue_positions = profile.tissue_positions[["barcode","array_row","array_col"]].copy()
-        tissue_positions["x"] = np.round(profile.tissue_positions["pixel_x"].values)
-        tissue_positions["y"] = np.round(profile.tissue_positions["pixel_y"].values)
+        tissue_positions["x"] = np.round(profile.tissue_positions["pixel_x"].values).astype(int)
+        tissue_positions["y"] = np.round(profile.tissue_positions["pixel_y"].values).astype(int)
         tissue_positions["in_tissue"] = spot_in_tissue
+        tissue_positions = tissue_positions[["barcode","in_tissue","array_row","array_col","x","y"]]
         
         X_sparse = csr_matrix((X_data, X_indices, X_indptr), shape=(len(profile), len(self.adata.var)))
         adata = AnnData(
