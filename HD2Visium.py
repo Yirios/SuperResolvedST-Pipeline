@@ -464,7 +464,7 @@ class VisiumHDData:
 
         return spotsOnImage
 
-    def generate_Visium(self, profile:VisiumProfile):
+    def generate_Visium(self, profile:VisiumProfile, uncover_thresholds=0):
 
         _, frame_center = self.profile.set_spots(profile)
         self.__spot2image(profile, frame_center)
@@ -476,6 +476,13 @@ class VisiumHDData:
         
         mask_in_tissue = self.locDF["in_tissue"] == 1
         for id in range(len(profile)):
+            bin_out = profile.tissue_positions.loc[id,"num_bin_out_spot"]
+            bin_in = profile.tissue_positions.loc[id,"num_bin_in_spot"]
+            if bin_out and bin_out/(bin_in+bin_out) > uncover_thresholds:
+                spot_in_tissue[id] = 0
+                print(id)
+                continue
+
             mask_in_spot = self.profile.tissue_positions["spot_label"] == id + 1
             mask = mask_in_spot[mask_in_tissue].values
             if mask.any():
@@ -488,6 +495,7 @@ class VisiumHDData:
                 spot_in_tissue[id] = 1
             else:
                 spot_in_tissue[id] = 0
+            
             if id%100==0: print(id)
         
         tissue_positions = profile.tissue_positions[["barcode","array_row","array_col"]].copy()
@@ -536,6 +544,7 @@ def main():
     rawdata = VisiumHDData(path = Path(args.rawdata))
     result =  rawdata.generate_Visium(VisiumProfile())
     result.save(save_prefix)
+
     # image = tifffile.imread("/data/datasets/Visium_HD_Human_Tonsil_Fresh_Frozen/Visium_HD_Human_Tonsil_Fresh_Frozen_tissue_image.tif")
     # image = tifffile.imread("/data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/Visium_HD_Mouse_Brain_Fresh_Frozen_tissue_image.tif")
 
@@ -554,7 +563,8 @@ def main():
     # a = VisiumHDProfile()
     # profile = VisiumProfile()
     # print(profile.frame,a.frame)
-    # label, _ = a.set_spots(profile=profile, mode="center")
+    # label, _ = a.set_spots(profile=profile )
+
     # print(a.tissue_positions)
     # print(profile.tissue_positions)
     # # label = a.set_spots(profile=profile, mode="corner", corner=3)
