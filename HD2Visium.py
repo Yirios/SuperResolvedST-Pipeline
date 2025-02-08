@@ -480,7 +480,6 @@ class VisiumHDData:
             bin_in = profile.tissue_positions.loc[id,"num_bin_in_spot"]
             if bin_out and bin_out/(bin_in+bin_out) > uncover_thresholds:
                 spot_in_tissue[id] = 0
-                print(id)
                 continue
 
             mask_in_spot = self.profile.tissue_positions["spot_label"] == id + 1
