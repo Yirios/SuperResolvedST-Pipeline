@@ -46,7 +46,7 @@ class SRresult:
     def load_xfuse(self):
 
         def find_min_bbox( mask: np.ndarray) -> Tuple[float, float]:
-            """"Finds the mininum bounding box enclosing a given image mask
+            """Finds the mininum bounding box enclosing a given image mask
             copy from xfuse/convert/utility.py"""
             contour, _ = cv.findContours(
                 mask.astype(np.uint8), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE

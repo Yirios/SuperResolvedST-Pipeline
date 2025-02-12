@@ -14,6 +14,8 @@ import scanpy as sc
 import imageio.v2 as ii
 from scipy.sparse import csr_matrix
 from anndata import AnnData
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="Variable names are not unique.*")
@@ -84,7 +86,7 @@ def write_10X_h5(adata, file:Path, metadata={}) -> None:
 class rawData:
     """
     """
-    image_extensions = {'.jpg', '.png', '.tiff'}
+    image_extensions = {'.jpg', '.png', '.tif', '.tiff'}
     def __init__(self,path:Path, pixel_size=16, auto_mask=True):
         self.path = path
         self.prefix = None
@@ -105,7 +107,7 @@ class rawData:
         self.images.sort(key=lambda i:np.sum(i.shape), reverse=True)
         
     def __read_location(self) -> pd.DataFrame:
-        file = self.path/"spatial/tissue_positions_list.csv"
+        file = self.path/"spatial/tissue_positions.csv"
         self.locDF = pd.read_csv(file,header=None)
         return self.locDF
 
@@ -210,8 +212,8 @@ class XfuseData(rawData):
         ii.imsave(self.prefix/"mask.png", mask)
         # save h5
         write_10X_h5(self.adata, self.prefix/"filtered_feature_bc_matrix.h5")
-        # copy tissue_positions_list.csv
-        shutil.copy(self.path/"spatial/tissue_positions_list.csv", self.prefix/"tissue_positions_list.csv")
+        # copy tissue_positions.csv
+        shutil.copy(self.path/"spatial/tissue_positions.csv", self.prefix/"tissue_positions.csv")
         # copy scale-factors
         shutil.copy(self.path/"spatial/scalefactors_json.json", self.prefix/"scalefactors_json.json")
         # calculate scale 
@@ -223,7 +225,7 @@ class iStarData(rawData):
 
     def transfer_loc(self) -> pd.DataFrame:
         df = self.locDF.copy(True)
-        df.columns = ["barcode","in_tissue","array_row","array_col","x","y"]
+        df.columns = ["barcode","in_tissue","array_row","array_col","y","x"]
         df = df[df["in_tissue"]==1]
         del df["in_tissue"]
         df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
@@ -312,17 +314,17 @@ def main():
     prefix = Path(args.prefix)
     rawdata = Path(args.rawdata)
     # data = XfuseData(path=rawdata)
-    # data = iStarData(path=rawdata)
+    data = iStarData(path=rawdata)
     # data = TESLAData(path=rawdata)
-    data = ImSpiREData(path=rawdata)
-    data.select_HVG(n_top_genes=2000)
-    if (rawdata/"gene_names.txt").exists():
-        genes = pd.read_csv(rawdata/"gene_names.txt", sep='\t', header=0)
-        data.require_genes(genes[0].values.tolist())
+    # data = ImSpiREData(path=rawdata)
+    # data.select_HVG(n_top_genes=2000)
+    # if (rawdata/"gene_names.txt").exists():
+    #     genes = pd.read_csv(rawdata/"gene_names.txt", sep='\t', header=0)
+    #     data.require_genes(genes[0].values.tolist())
     # data.save(prefix/"xfuse")
     # data.save(prefix/"istar")
     # data.save(prefix/"TESLA")
-    data.save(prefix/"ImSpiRE")
+    data.save(prefix)
 
 if __name__ == "__main__":
     main()
