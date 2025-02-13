@@ -15,7 +15,7 @@ import tifffile
 from anndata import AnnData
 from scipy.sparse import csr_matrix
 
-from utility import write_10X_h5, fast_to_csv, AffineTransform
+from utility import *
 from profiles import Profile, VisiumProfile, VisiumHDProfile
 
 import warnings
@@ -57,35 +57,6 @@ class rawData:
             self.metadata = dict(f.attrs)
         sc.pp.filter_genes(self.adata, min_counts=10)
 
-    def _read_mask(self, auto_mask=True) -> np.ndarray:
-        self.masks = [
-            ii.imread(f) for f in self.path.iterdir() 
-            if f.is_file() and f.suffix.lower() in rawData.image_extensions and 'mask' in f.name.lower()
-        ]
-        self.masks.sort(key=lambda i:np.sum(i.shape), reverse=True)
-        # find matching image
-        self.mask2image=[]
-        if len(self.masks) != 0:
-            for (i,image),(j,mask) in product(enumerate(self.images),enumerate(self.masks)):
-                if mask.shape[0] == image.shape[0] and mask.shape[1] == image.shape[1]:
-                    self.mask2image.append((j,i))
-            if len(self.mask2image) == 0:
-                if auto_mask:
-                    print("Can't find mask image, auto masking.")
-                    self.masks.insert(0,self.auto_mask(self.images[0]))
-                    self.mask2image.append((0,0))
-                else:
-                    raise ValueError("Can't find mask")
-        else:
-            if auto_mask:
-                print("Can't find mask image, auto masking.")
-                self.masks.append(self.auto_mask(self.images[0]))
-                self.mask2image.append((0,0))
-            else:
-                raise ValueError("Can't find mask")
-        
-        return self.masks
-
     def read_image(self, file:Path):
         self.image = tifffile.imread(file)
     
@@ -112,28 +83,7 @@ class rawData:
         PointsOnFrame = self.profile.tissue_positions[["frame_row","frame_col"]].values
         PointsOnImage = self.locDF[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
         self.mapper = AffineTransform(PointsOnFrame, PointsOnImage)
-        self.pixel_size = self.mapper.resolution
-
-    def auto_mask(self, img : np.ndarray,
-                  CANNY_THRESH_1 = 100, CANNY_THRESH_2 = 200, apertureSize=5, L2gradient = True) -> np.ndarray:
-        if len(img.shape)==3:
-            gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-        elif len(img.shape)==2:
-            gray=(img*((1, 255)[np.max(img)<=1])).astype(np.uint8)
-        else:
-            print("Image format error!")
-        edges = cv2.Canny(gray, CANNY_THRESH_1, CANNY_THRESH_2,apertureSize = apertureSize, L2gradient = L2gradient)
-        edges = cv2.dilate(edges, None)
-        edges = cv2.erode(edges, None)
-        cnt_info = []
-        cnts, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        for c in cnts:
-            cnt_info.append((c,cv2.isContourConvex(c),cv2.contourArea(c),))
-        cnt_info.sort(key=lambda c: c[2], reverse=True)
-        cnt=cnt_info[0][0]
-        mask = np.zeros(img.shape[:2], dtype=np.uint8)
-        cv2.drawContours(mask, [cnt], contourIdx=-1, color=255, thickness=-1)
-        return mask
+        self.pixel_size = 1/self.mapper.resolution
 
     def select_HVG(self,n_top_genes=2000) -> None:
         sc.pp.highly_variable_genes(self.adata, n_top_genes=n_top_genes, subset=True, flavor='seurat_v3')
@@ -154,20 +104,27 @@ class VisiumData(rawData):
         self.match2profile(profile)
         self.profile:VisiumProfile
     
-    def mask(self, auto_mask=False, mask_path:Path=None):
-        pass
+    def tissue_mask(self, auto_mask=False, mask_path:Path=None, **kwargs):
+        if auto_mask or mask_path == None:
+            self.mask = auto_tissue_mask(self.image,**kwargs)
+        else:
+            self.mask = ii.imread(mask_path)
+        return self.mask
     
     def convert(self):
-        (self.prefix/"spatial").mkdir(parents=True, exist_ok=True)
-
-        self.locDF.to_csv(self.prefix/"spatial/tissue_positions.csv", index=False, header=False)
-
+        # feature_bc_matrix
         write_10X_h5(self.adata, self.prefix/'filtered_feature_bc_matrix.h5', self.metadata)
-        
+        # raw image
+        tifffile.imwrite(self.prefix/"image.tif", self.image, bigtiff=True)
+        # spatial output
+        (self.prefix/"spatial").mkdir(parents=True, exist_ok=True)
+        self.locDF.to_csv(self.prefix/"spatial/tissue_positions.csv", index=False, header=False)
         with open(self.prefix/"spatial/scalefactors_json.json", "w") as f:
             json.dump(self.scaleF, f, ensure_ascii=False, indent=4)
-
-        tifffile.imwrite(self.prefix/"image.tif", self.image, bigtiff=True)
+        lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
+        ii.imsave(self.prefix/"spatial/tissue_lowres_image.png", lowres_image)
+        hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
+        ii.imsave(self.prefix/"spatial/tissue_hires_image.png", hires_image)
 
     def save(self, prefix:Path):
         prefix.mkdir(parents=True, exist_ok=True)
@@ -181,6 +138,7 @@ class VisiumData(rawData):
 
     def Image2VisiumHD(self, profile:VisiumHDProfile):
 
+        _, frame_center = self.profile.set_spots(profile)
         return None
 
     def Visium2HD(self, HDporfile:VisiumHDProfile, SRmodel):
@@ -242,7 +200,7 @@ class VisiumHDData(rawData):
         y0 = frame_center[1]-self.profile.frame[0]/2
         spotOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values + np.array([[x0,y0]])
         spotsOnImage = self.mapper.transform_batch(spotOnFrame)
-        profile.tissue_positions[["pixel_x", "pixel_y"]] = spotsOnImage
+        profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = spotsOnImage
 
         return spotsOnImage
     
@@ -280,8 +238,8 @@ class VisiumHDData(rawData):
             if id%100==0: print(id)
         
         tissue_positions = profile.tissue_positions[["barcode","array_row","array_col"]].copy()
-        tissue_positions["pxl_row_in_fullres"] = np.round(profile.tissue_positions["pixel_x"].values).astype(int)
-        tissue_positions["pxl_col_in_fullres"] = np.round(profile.tissue_positions["pixel_y"].values).astype(int)
+        tissue_positions["pxl_row_in_fullres"] = np.round(profile.tissue_positions["pxl_row_in_fullres"].values).astype(int)
+        tissue_positions["pxl_col_in_fullres"] = np.round(profile.tissue_positions["pxl_col_in_fullres"].values).astype(int)
         tissue_positions["in_tissue"] = spot_in_tissue
         tissue_positions = tissue_positions[profile.RawColumes]
         

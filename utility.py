@@ -7,6 +7,7 @@ from typing import List, Dict,Tuple
 
 import numpy as np
 import pandas as pd
+import cv2
 import h5py
 from anndata import AnnData
 
@@ -78,10 +79,9 @@ class AffineTransform:
     
     @property
     def resolution(self):
-        # M 是一个 2x2 的仿射变换矩阵（不考虑平移 T）
         s_x = np.linalg.norm(self.M[:, 0])  # 第1列
         s_y = np.linalg.norm(self.M[:, 1])  # 第2列
-        return np.sqrt(s_x*s_x+s_y*s_y)
+        return np.mean((s_x,s_y))
 
 def hash_to_dna(index, length=16, suffix="-1"):
     """ 通过哈希值生成 DNA 序列 """
@@ -146,49 +146,33 @@ def write_10X_h5(adata:AnnData, file:Path, metadata={}) -> None:
             adata.var['feature_type'] = 'Gene Expression'
             ftrs.create_dataset("feature_type", data=np.array(adata.var['feature_type'], dtype=f'S{str_max(adata.var["feature_type"])}'))
 
-class Layer:
-    def __init__(self, name, shape):
-        self.name = name
-        self.shape = shape
+def auto_tissue_mask(img : np.ndarray,
+              CANNY_THRESH_1 = 100,
+              CANNY_THRESH_2 = 200,
+              apertureSize=5,
+              L2gradient = True) -> np.ndarray:
+    if len(img.shape)==3:
+        gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+    elif len(img.shape)==2:
+        gray=(img*((1, 255)[np.max(img)<=1])).astype(np.uint8)
+    else:
+        print("Image format error!")
+    edges = cv2.Canny(gray, CANNY_THRESH_1, CANNY_THRESH_2,apertureSize = apertureSize, L2gradient = L2gradient)
+    edges = cv2.dilate(edges, None)
+    edges = cv2.erode(edges, None)
+    cnt_info = []
+    cnts, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    for c in cnts:
+        cnt_info.append((c,cv2.isContourConvex(c),cv2.contourArea(c),))
+    cnt_info.sort(key=lambda c: c[2], reverse=True)
+    cnt=cnt_info[0][0]
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [cnt], contourIdx=-1, color=255, thickness=-1)
+    return mask
 
-class LayerManager:
-    # Size of Capture Areas
-    BG = (8000,8000)
-    def __init__(self, background=BG):
-        self.background = background
-        self.layers = []
-
-    def get_frame_center(frame_down, frame_up, mode, kwargs:Dict) -> Tuple:
-        w, h = frame_up
-        W, H = frame_down
-        if mode == "corner":
-            corner = kwargs.get("corner", None)
-            if corner in (0,1,2,3):
-                # Define corners: 0-top-left, 1-top-right, 2-bottom-right, 3-bottom-left
-                if corner == 0: return h/2, w/2
-                if corner == 1: return h/2, W-w/2
-                if corner == 2: return H-h/2, W-w/2
-                if corner == 3: return H-h/2, w/2
-            else:
-                raise ValueError("Supported corner values are 0, 1, 2, 3")
-        elif mode == "manual":
-            center = kwargs.get("center", None)
-            if isinstance(center, (tuple, list)) and len(center)==2:
-                return center
-            else:
-                raise ValueError("For manual mode, provide a center as a tuple or list of two elements")
-        elif mode == "center":
-            return H/2, W/2
-        elif mode == "adaptive":
-            y = W/2 if w<W else w/2
-            x = H/2 if h<H else h/2
-            return x,y
-        else:
-            raise ValueError("Unsupported mode")
-    
-    def reshape(self):
-        pass
-
-    def add_layer(self,layer:Layer, ):
-        self.layers.append[layer]
-        pass
+def image_resize(img, scalef:float=None, shape=None):
+    if shape == None and scalef != None:
+        resized_image = cv2.resize(img, None,fx=scalef, fy=scalef, interpolation=cv2.INTER_AREA)
+    elif shape != None:
+        resized_image = cv2.resize(img, shape, interpolation=cv2.INTER_AREA)
+    return resized_image
