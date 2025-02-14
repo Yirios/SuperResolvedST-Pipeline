@@ -81,7 +81,7 @@ class AffineTransform:
     def resolution(self):
         s_x = np.linalg.norm(self.M[:, 0])  # 第1列
         s_y = np.linalg.norm(self.M[:, 1])  # 第2列
-        return np.mean((s_x,s_y))
+        return 1/np.mean((s_x,s_y))
 
 def hash_to_dna(index, length=16, suffix="-1"):
     """ 通过哈希值生成 DNA 序列 """
@@ -175,4 +175,147 @@ def image_resize(img, scalef:float=None, shape=None):
         resized_image = cv2.resize(img, None,fx=scalef, fy=scalef, interpolation=cv2.INTER_AREA)
     elif shape != None:
         resized_image = cv2.resize(img, shape, interpolation=cv2.INTER_AREA)
+    else:
+        raise ValueError("Please input scale factor or target shape")
     return resized_image
+
+def calculate_scale_factor(original, target):
+    """
+    计算原始图像到目标图像的缩放比例。
+
+    :param original: 原始图像
+    :param target: 目标图像
+    :return: 缩放比例
+    """
+    original_width, original_height = original.shape[:2]
+    target_width, target_height = target.shape[:2]
+
+    # 计算宽度和高度方向的缩放比例
+    width_scale = target_width / original_width
+    height_scale = target_height / original_height
+
+    # 选择较小的缩放比例以保持图像纵横比
+    scale_factor = np.linalg.norm([width_scale, height_scale]) / np.sqrt(2)
+
+    return scale_factor
+
+def image_pad(img, shape):
+        pad_h = shape[0] - img.shape[0]
+        pad_w = shape[1] - img.shape[1]
+        top = pad_h // 2
+        bottom = pad_h - top
+        left = pad_w // 2
+        right = pad_w - left
+        return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT), (top,left)
+
+
+def mask_outside_rectangle(image, rect):
+    """
+    将指定矩形范围外的像素设为黑色
+    :param image: 单通道图像
+    :param rect: 矩形 (x, y, w, h)
+    :return: 处理后的图像
+    """
+    mask = np.zeros_like(image)
+    x, y, w, h = rect
+    mask[x:x+h, y:y+w] = 255  # 在矩形区域内设为白色
+    result = cv2.bitwise_and(image, mask)
+    return result
+
+class PerspectiveTransformer:
+    def __init__(self, image: np.ndarray, corners: np.ndarray):
+        """
+        初始化透视变换类
+
+        :param image: 原始图像 (numpy 数组)
+        :param corners: 四个顶点坐标，形状为 (4, 2)，顺序为左上、右上、右下、左下
+        """
+        self.image = image
+        self.corners = corners.astype("float32")
+        self.warped_image = None
+        self.M = None       # 正向透视变换矩阵
+        self.M_inv = None   # 逆透视变换矩阵
+        if len(self.image.shape) == 2:
+            self.channels = 1
+        else:
+            self.channels = self.image.shape[2]
+
+    def crop_image(self):
+        """
+        利用给定的四个顶点裁剪并校正图像，
+        同时计算正向和逆向透视变换矩阵。
+
+        :return: 裁剪后的图像和正向透视变换矩阵 M
+        """
+        # 计算目标矩形的宽度：取左下到右下和左上到右上的距离的最大值
+        widthA = np.linalg.norm(self.corners[2] - self.corners[3])
+        widthB = np.linalg.norm(self.corners[1] - self.corners[0])
+        maxWidth = int(max(widthA, widthB))
+
+        # 计算目标矩形的高度：取右上到右下和左上到左下的距离的最大值
+        heightA = np.linalg.norm(self.corners[1] - self.corners[2])
+        heightB = np.linalg.norm(self.corners[0] - self.corners[3])
+        maxHeight = int(max(heightA, heightB))
+
+        # 定义目标矩形的四个顶点
+        target_corner = np.array([
+            [0, 0],                         # 左上角
+            [0, maxHeight - 1],             # 右上角
+            [maxWidth - 1, maxHeight - 1],  # 右下角
+            [maxWidth - 1, 0]               # 右下角
+        ], dtype="float32")
+
+        # 计算正向透视变换矩阵 M
+        self.M = cv2.getPerspectiveTransform(self.corners, target_corner)
+        # 利用 M 进行透视变换，得到裁剪并校正后的图像
+        if self.channels == 1:
+            borderValue = 0
+        else:
+            borderValue = tuple([255] * self.image.shape[2])
+        self.warped_image = cv2.warpPerspective(self.image, self.M,
+                                                (maxWidth, maxHeight),
+                                                borderValue=borderValue)
+        # 计算逆向透视变换矩阵，用于将 warped 图像中的点映射回原图
+        self.M_inv = np.linalg.inv(self.M)
+        return self.warped_image, self.M
+
+    def reverse_map_points(self, points: np.ndarray) -> np.ndarray:
+        """
+        批量将 warped 图像中的点反向映射回原图像
+
+        :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
+        :return: 映射回原图像后的点的 numpy 数组，形状为 (N, 2)
+        """
+        if self.M_inv is None:
+            raise ValueError("请先调用 crop_image 方法计算透视变换矩阵。")
+
+        # 将点转换为齐次坐标 (x, y, 1)
+        ones = np.ones((points.shape[0], 1))
+        homogeneous_points = np.hstack([points, ones])
+        
+        # 利用逆矩阵映射
+        mapped_points = homogeneous_points.dot(self.M_inv.T)
+        
+        # 归一化（除以第三个分量）
+        mapped_points /= mapped_points[:, 2][:, np.newaxis]
+        return mapped_points[:, :2]
+    
+    def map_points(self, points: np.ndarray) -> np.ndarray:
+        """
+        将原图中的多个点映射到透视变换后的图像中
+
+        :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
+        :return: 映射后的点的 numpy 数组，形状为 (N, 2)
+        """
+        # 将每个点扩展为齐次坐标 (x, y, 1)
+        ones = np.ones((points.shape[0], 1))
+        homogeneous_points = np.hstack((points, ones))  # 形状 (N, 3)
+        
+        # 使用矩阵乘法进行映射（注意使用 M 的转置）
+        mapped_points = homogeneous_points.dot(self.M.T)  # 形状 (N, 3)
+        
+        # 对每个点归一化（除以第三个分量）
+        mapped_points /= mapped_points[:, 2, np.newaxis]
+        
+        # 返回前两列，即映射后的 (x, y)
+        return mapped_points[:, :2]

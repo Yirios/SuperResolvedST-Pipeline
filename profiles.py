@@ -9,33 +9,6 @@ import warnings
 
 from utility import hash_to_dna
 
-def get_frame_center(frame_down, frame_up, mode, kwargs:Dict) -> Tuple:
-    w, h = frame_up
-    W, H = frame_down
-    if mode == "corner":
-        corner = kwargs.get("corner", None)
-        if corner in (0,1,2,3):
-            # Define corners: 0-top-left, 1-top-right, 2-bottom-right, 3-bottom-left
-            if corner == 0: return h/2, w/2
-            if corner == 1: return h/2, W-w/2
-            if corner == 2: return H-h/2, W-w/2
-            if corner == 3: return H-h/2, w/2
-        else:
-            raise ValueError("Supported corner values are 0, 1, 2, 3")
-    elif mode == "manual":
-        center = kwargs.get("center", None)
-        if isinstance(center, (tuple, list)) and len(center)==2:
-            return center
-        else:
-            raise ValueError("For manual mode, provide a center as a tuple or list of two elements")
-    elif mode == "center":
-        return H/2, W/2
-    elif mode == "adaptive":
-        y = W/2 if w<W else w/2
-        x = H/2 if h<H else h/2
-        return x,y
-    else:
-        raise ValueError("Unsupported mode")
 
 class Profile:
     LowresImage = 600
@@ -139,6 +112,9 @@ class VisiumProfile(Profile):
         array_row = id//self.row_range
         array_col = 2 * (id%self.row_range) + array_row%2
         return array_row, array_col
+    
+    def set_bins(self, profile:"VisiumHDProfile", mode="adaptive", **kwargs) -> Tuple[np.ndarray,Tuple[float,float]]:
+        frame_center = get_frame_center(self.frame, profile.frame, mode, kwargs)
 
 class VisiumHDProfile(Profile):
     HiresImage = 6000
@@ -225,14 +201,44 @@ class VisiumHDProfile(Profile):
         self.col_range = int(self.col_range*self.bin_size/bin_size)
         self.bin_size = bin_size
         self.tissue_positions = self.__get_dataframe()
-    
-    def set_spots(self, profile:VisiumProfile, mode="adaptive", **kwargs) -> Tuple[np.ndarray,Tuple[float,float]]:
+
+
+def get_frame_center(frame_down, frame_up, mode, kwargs:Dict) -> Tuple:
+    w, h = frame_up
+    W, H = frame_down
+    if mode == "corner":
+        corner = kwargs.get("corner", None)
+        if corner in (0,1,2,3):
+            # Define corners: 0-top-left, 1-top-right, 2-bottom-right, 3-bottom-left
+            if corner == 0: return h/2, w/2
+            if corner == 1: return h/2, W-w/2
+            if corner == 2: return H-h/2, W-w/2
+            if corner == 3: return H-h/2, w/2
+        else:
+            raise ValueError("Supported corner values are 0, 1, 2, 3")
+    elif mode == "manual":
+        center = kwargs.get("center", None)
+        if isinstance(center, (tuple, list)) and len(center)==2:
+            return center
+        else:
+            raise ValueError("For manual mode, provide a center as a tuple or list of two elements")
+    elif mode == "center":
+        return H/2, W/2
+    elif mode == "adaptive":
+        y = W/2 if w<W else w/2
+        x = H/2 if h<H else h/2
+        return x,y
+    else:
+        raise ValueError("Unsupported mode")
+
+def align_profile(HDprofile:VisiumHDProfile, profile:VisiumProfile, mode="center", quiet=False, **kwargs):
         """\
         Place the Visium spots onto the Visium HD grid and label bins according
         to the spots' coverage.
 
         Parameters
         ----------
+        HDprofile : VisiumHDProfile
         profile : VisiumProfile
         mode : str, optional
             The positioning mode for aligning the Visium profile on the HD grid. Supported modes are:
@@ -245,6 +251,7 @@ class VisiumHDProfile(Profile):
             - For "corner" mode: provide a key ``corner`` with an integer value in {0, 1, 2, 3}.\n
                 Define: 0-top-left, 1-top-right, 2-bottom-right, 3-bottom-left
             - For "manual" mode: provide a key ``center`` with a tuple or list of two numeric coordinates.
+        quiet : Bool, optional
 
         Returns
         -------
@@ -261,7 +268,7 @@ class VisiumHDProfile(Profile):
             If an unsupported positioning mode is provided or if the required parameters for the
             specified mode are missing or invalid.
         """
-        frame_center = get_frame_center(self.frame, profile.frame, mode, kwargs)
+        frame_center = get_frame_center(HDprofile.frame, profile.frame, mode, kwargs)
         x0 = frame_center[0]-profile.frame[1]/2
         y0 = frame_center[1]-profile.frame[0]/2
         spots = (
@@ -270,11 +277,11 @@ class VisiumHDProfile(Profile):
         )
 
         # Lambda to determine the range of bin indices to check for a given coordinate
-        bin_iter = lambda a: range(int((a-r)/self.bin_size),int((a+r)/self.bin_size)+2)
+        bin_iter = lambda a: range(int((a-r)/HDprofile.bin_size),int((a+r)/HDprofile.bin_size)+2)
         d2 = lambda x,y,a,b: (x-a)*(x-a) + (y-b)*(y-b)
 
-        spot_label_image = np.zeros((self.row_range,self.col_range))
-        spot_label = np.zeros(len(self), dtype=int)
+        spot_label_image = np.zeros((HDprofile.row_range,HDprofile.col_range))
+        spot_label = np.zeros(len(HDprofile), dtype=int)
         uncovered = np.zeros(len(profile), dtype=int)
         covered = np.zeros(len(profile), dtype=int)
         
@@ -282,23 +289,20 @@ class VisiumHDProfile(Profile):
         for id, x, y, r in spots:
             # Iterate over bins near the spot center
             for i, j in product(bin_iter(x), bin_iter(y)):
-                bin_x, bin_y, _ = self[i,j]
+                bin_x, bin_y, _ = HDprofile[i,j]
                 if d2(bin_x,bin_y,x,y) < r*r:
-                    if i<0 or j<0 or i>self.col_range-1 or j>self.row_range-1:
+                    if i<0 or j<0 or i>HDprofile.col_range-1 or j>HDprofile.row_range-1:
                         uncovered[id] += 1
                     else:
                         spot_label_image[i,j] = id + 1
                         spot_label[i*profile.row_range+j] = id
                         covered[id] += 1
-            if uncovered[id]:
+            if not quiet and uncovered[id]:
                 covered_rate = 100 * covered[id] / (uncovered[id]+covered[id])
                 warnings.warn(f"Spot {profile.id2array(id)} cover rate: {covered_rate:0.2f}%, that {uncovered[id]:d} bins outside the grid.")
 
-        self.tissue_positions["spot_label"] = spot_label
+        HDprofile.tissue_positions["spot_label"] = spot_label
         profile.tissue_positions["num_bin_in_spot"] = covered
         profile.tissue_positions["num_bin_out_spot"] = uncovered
         
         return spot_label_image, frame_center
-    
-if __name__ == "__main__":
-    pass

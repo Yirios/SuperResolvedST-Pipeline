@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+import pickle
 from typing import List, Dict, Tuple
 from itertools import product
 import shutil
@@ -12,11 +13,11 @@ import h5py
 import scanpy as sc
 import imageio.v2 as ii
 import tifffile
-from anndata import AnnData
+from anndata import AnnData, read_h5ad
 from scipy.sparse import csr_matrix
 
 from utility import *
-from profiles import Profile, VisiumProfile, VisiumHDProfile
+from profiles import *
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="Variable names are not unique.*")
@@ -60,6 +61,7 @@ class rawData:
     def read_image(self, file:Path):
         self.image = tifffile.imread(file)
     
+    @timer
     def load(self, path:Path, source_image_path:Path=None):
         self.path = Path(path)
         self._read_feature_bc_matrix()
@@ -67,6 +69,23 @@ class rawData:
         self._read_location()
         if source_image_path :
             self.read_image(Path(source_image_path))
+
+    @timer
+    def save(self, path:Path):
+        path.mkdir(parents=True, exist_ok=True)
+        # feature_bc_matrix
+        write_10X_h5(self.adata, path/'filtered_feature_bc_matrix.h5', self.metadata)
+        # raw image
+        tifffile.imwrite(path/"image.tif", self.image, bigtiff=True)
+        # spatial output
+        (path/"spatial").mkdir(parents=True, exist_ok=True)
+        self.locDF.to_csv(path/"spatial/tissue_positions.csv", index=False, header=False)
+        with open(path/"spatial/scalefactors_json.json", "w") as f:
+            json.dump(self.scaleF, f, ensure_ascii=False, indent=4)
+        lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
+        ii.imsave(path/"spatial/tissue_lowres_image.png", lowres_image)
+        hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
+        ii.imsave(path/"spatial/tissue_hires_image.png", hires_image)
 
     def match2profile(self, profile:Profile):
         self.profile = profile
@@ -83,7 +102,7 @@ class rawData:
         PointsOnFrame = self.profile.tissue_positions[["frame_row","frame_col"]].values
         PointsOnImage = self.locDF[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
         self.mapper = AffineTransform(PointsOnFrame, PointsOnImage)
-        self.pixel_size = 1/self.mapper.resolution
+        self.pixel_size = self.mapper.resolution
 
     def select_HVG(self,n_top_genes=2000) -> None:
         sc.pp.highly_variable_genes(self.adata, n_top_genes=n_top_genes, subset=True, flavor='seurat_v3')
@@ -103,68 +122,50 @@ class VisiumData(rawData):
         super().load(path, source_image_path)
         self.match2profile(profile)
         self.profile:VisiumProfile
-    
-    def tissue_mask(self, auto_mask=False, mask_path:Path=None, **kwargs):
-        if auto_mask or mask_path == None:
-            self.mask = auto_tissue_mask(self.image,**kwargs)
-        else:
-            self.mask = ii.imread(mask_path)
-        return self.mask
-    
-    def convert(self):
-        # feature_bc_matrix
-        write_10X_h5(self.adata, self.prefix/'filtered_feature_bc_matrix.h5', self.metadata)
-        # raw image
-        tifffile.imwrite(self.prefix/"image.tif", self.image, bigtiff=True)
-        # spatial output
-        (self.prefix/"spatial").mkdir(parents=True, exist_ok=True)
-        self.locDF.to_csv(self.prefix/"spatial/tissue_positions.csv", index=False, header=False)
-        with open(self.prefix/"spatial/scalefactors_json.json", "w") as f:
-            json.dump(self.scaleF, f, ensure_ascii=False, indent=4)
-        lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
-        ii.imsave(self.prefix/"spatial/tissue_lowres_image.png", lowres_image)
-        hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
-        ii.imsave(self.prefix/"spatial/tissue_hires_image.png", hires_image)
 
-    def save(self, prefix:Path):
-        prefix.mkdir(parents=True, exist_ok=True)
-        self.prefix = prefix
-        print("Start convert")
-        # write selected gene names
-        with open(self.prefix/"gene-names.txt","w") as f:
-            f.write("\n".join(self.adata.var.index.values))
-        self.convert()
-        print("Finish convert")
+    def _bin2image(self, profile:VisiumHDProfile, frame_center:Tuple[float, float]):
+        if not {"pxl_row_in_fullres", "pxl_col_in_fullres"} <= profile.tissue_positions.columns:
+            return profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]]
+        
+        x0 = frame_center[0]-self.profile.frame[1]/2
+        y0 = frame_center[1]-self.profile.frame[0]/2
+        binsOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values + np.array([[x0,y0]])
+        binsOnImage = self.mapper.transform_batch(binsOnFrame)
+        profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = binsOnImage
 
-    def Image2VisiumHD(self, profile:VisiumHDProfile):
+        return binsOnImage
 
-        _, frame_center = self.profile.set_spots(profile)
-        return None
+    def Visium2HD(self, HDprofile:VisiumHDProfile, SRmodel, **kwargs) -> "VisiumHDData":
 
-    def Visium2HD(self, HDporfile:VisiumHDProfile, SRmodel):
-        HDlikeImage = self.Image2VisiumHD(HDporfile)
+        _, frame_center =  align_profile(HDprofile, self.profile, quiet=True, **kwargs)
+        self._bin2image(HDprofile, frame_center)
 
+        # Get demo VisiumHD: without feature_bc_matrix
         metadata = self.profile.metadata.copy()
         metadata["chemistry_description"] = self.metadata["chemistry_description"]
         
         FullImage = np.max(self.image.shape)
         scaleF = {
-            "spot_diameter_fullres": HDporfile.bin_size/self.pixel_size,
-            "bin_size_um": HDporfile.bin_size,
+            "spot_diameter_fullres": HDprofile.bin_size/self.pixel_size,
+            "bin_size_um": HDprofile.bin_size,
             "microns_per_pixel": self.pixel_size,
-            "tissue_lowres_scalef": HDporfile.LowresImage/FullImage,
+            "tissue_lowres_scalef": HDprofile.LowresImage/FullImage,
             "fiducial_diameter_fullres": self.scaleF["fiducial_diameter_fullres"],
-            "tissue_hires_scalef": HDporfile.HiresImage/FullImage,
-            "regist_target_img_scalef": HDporfile.HiresImage/FullImage,
+            "tissue_hires_scalef": HDprofile.HiresImage/FullImage,
+            "regist_target_img_scalef": HDprofile.HiresImage/FullImage,
         }
         adata = AnnData()
-        tissue_positions = HDporfile.tissue_positions[["barcode","array_row","array_col"]].copy()
+        cols = [col for col in HDprofile.RawColumes if col != "in_tissue"]
+        tissue_positions = HDprofile.tissue_positions[cols].copy()
         superHD_demo = VisiumHDData(
                 tissue_positions = tissue_positions,
                 feature_bc_matrix = adata,
                 scalefactors = scaleF,
                 metadata = metadata
             )
+        superHD_demo.image = self.image
+        superHD_demo.pixel_size = self.pixel_size
+
         return superHD_demo
 
 class VisiumHDData(rawData):
@@ -192,22 +193,24 @@ class VisiumHDData(rawData):
         '''
         pass
 
-    def __spot2image(self, profile:VisiumProfile, frame_center:Tuple[float, float]):
+    def _spot2image(self, profile:VisiumProfile, frame_center:Tuple[float, float]):
         '''\
-        add pixel_x, pixel_y in profile.tissue_positions
+        add pxl_row_in_fullres, pxl_col_in_fullres in profile.tissue_positions
         '''
+        if {"pxl_row_in_fullres", "pxl_col_in_fullres"} <= set(profile.tissue_positions.columns):
+            return profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]]
         x0 = frame_center[0]-self.profile.frame[1]/2
         y0 = frame_center[1]-self.profile.frame[0]/2
-        spotOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values + np.array([[x0,y0]])
-        spotsOnImage = self.mapper.transform_batch(spotOnFrame)
+        spotsOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values + np.array([[x0,y0]])
+        spotsOnImage = self.mapper.transform_batch(spotsOnFrame)
         profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = spotsOnImage
 
         return spotsOnImage
     
-    def generate_Visium(self, profile:VisiumProfile, uncover_thresholds=0) -> VisiumData:
+    def HD2Visium(self, profile:VisiumProfile, uncover_thresholds=0, **kwargs) -> VisiumData:
 
-        _, frame_center = self.profile.set_spots(profile)
-        self.__spot2image(profile, frame_center)
+        _, frame_center =  align_profile(self.profile, profile, **kwargs)
+        self._spot2image(profile, frame_center)
         
         X_indptr = [0]
         X_indices = np.zeros(0)
@@ -274,13 +277,112 @@ class VisiumHDData(rawData):
 
         return emulate_visium
 
-class XfuseData(VisiumData):
+class SRtools(VisiumData):
+    '''
+    Image base: 
+    VisiumHD base:
+    '''
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs)
+        self.prefix:Path = None
+        self.super_pixel_size:float = None
+        self.HDData:VisiumHDData = None
+        self.mask:np.ndarray = None
+        self.SRresult:pd.DataFrame = None
 
-    def convert(self, image_index=0):
+    def set_super_pixel_size(self, super_pixel_size:float=8.0):
+        self.super_pixel_size = super_pixel_size
+    
+    def set_target_VisiumHD(self, HDData:VisiumHDData):
+        self.super_pixel_size = HDData.bin_size
+        self.HDData = HDData
+    
+    def tissue_mask(self, mask:np.ndarray=None, mask_image_path:Path=None, auto_mask=False, **kwargs):
+        
+        if mask != None:
+            pass
+        elif mask_image_path != None:
+            mask = ii.imread(mask_image_path)
+        elif auto_mask:
+            self.mask = auto_tissue_mask(self.image,**kwargs)
+            return self.mask
+        else:
+            raise ValueError("Please provide a mask or set auto_mask=True to apply masking automatically.")
+        
+        if self.image.shape[:2] == mask.shape[:2]:
+            self.mask = mask
+        else:
+            raise ValueError("The mask must have the same shape as the image.")
+        return self.mask
+    
+    def get_HDlikeImage(self, profile:Profile) -> PerspectiveTransformer:
+        x0 = profile.frame[1]//2 - self.HDData.profile.frame[1]//2
+        y0 = profile.frame[0]//2 - self.HDData.profile.frame[0]//2
+        cornerOnfarme = profile.tissue_positions[["frame_row","frame_col"]] - np.array([[x0,y0]])
+        cornerOnImage = self.mapper.transform_batch(cornerOnfarme)
+        image_transformer = PerspectiveTransformer(self.image, corners=cornerOnImage)
+        return image_transformer, (x0,y0)
+
+    def convert(self):
+        super().save(self, self.prefix)
+        ii.imsave(self.prefix/"mask.png", self.mask)
+
+    def save_inpout(self, prefix:Path):
+        prefix.mkdir(parents=True, exist_ok=True)
+        self.prefix = prefix
+        print("Start convert")
+        # write selected gene names
+        with open(self.prefix/"gene-names.txt","w") as f:
+            f.write("\n".join(self.adata.var.index.values))
+        # write super pixel size
+        with open(self.prefix/"super-pixel-size.txt","w") as f:
+            f.write(str(self.super_pixel_size))
+        self.convert()
+        print("Finish convert")
+    
+    def load_output(self, prefix:Path=None):
+        if not (self.prefix or prefix):
+            raise ValueError("Run save_inpout frist or set prefix")
+        else: # will recover the old prefix
+            self.prefix = prefix
+        if not self.super_pixel_size:
+            with open(self.prefix/"super-pixel-size.txt","r") as f:
+                self.super_pixel_size = float(f.read())
+    
+    @timer
+    def to_VisiumHD(self, superHD_demo:VisiumHDData, HDprefix:Path):
+        superHD_demo.adata
+        superHD_demo.locDF
+        superHD_demo.save(HDprefix)
+
+    @timer
+    def to_csv(self, file=None, sep="\t"):
+        if not file:
+            file = self.prefix/"super-resolution.csv"
+        with open(file, "w") as f:
+            header = self.SRresult.columns.to_list()
+            header[0] = f"x:{self.image_shape[0]}"
+            header[1] = f"y:{self.image_shape[1]}"
+            f.write(sep.join(header) + "\n")
+            for _, row in self.SRresult.iterrows():
+                f.write(sep.join(map(str, row)) + "\n")
+    
+    @timer
+    def to_h5ad(self):
+        adata = AnnData(self.SRresult.iloc[:,2:])
+        adata.obs = self.SRresult.iloc[:, :2]
+        adata.var.index = self.SRresult.columns[2:]
+        adata.uns["shape"] = list(self.image_shape)
+        adata.uns["project_dir"] = str(self.prefix.resolve())
+        adata.write_h5ad(self.prefix/"super-resolution.h5ad")
+
+class Xfuse(SRtools):
+
+    def convert(self):
         # save image.png
-        ii.imsave(self.prefix/"image.png", self.images[self.mask2image[image_index][1]])
+        ii.imsave(self.prefix/"image.png", self.image)
         # save mask.png
-        mask = self.masks[self.mask2image[image_index][0]] > 0
+        mask = self.mask > 0
         mask = np.where(mask, cv2.GC_FGD, cv2.GC_BGD).astype(np.uint8)
         ii.imsave(self.prefix/"mask.png", mask)
         # save h5
@@ -291,18 +393,12 @@ class XfuseData(VisiumData):
         shutil.copy(self.path/"spatial/scalefactors_json.json", self.prefix/"scalefactors_json.json")
         # calculate scale 
         with open(self.prefix/"scale.txt","w") as f:
-            f.write(str(self.scaleF["tissue_hires_scalef"]*4/self.pixel_size))
-            # f.write(str(65*self.pixel_size/self.scaleF["spot_diameter_fullres"]))
+            f.write(str(self.pixel_size/self.super_pixel_size))
+    
+    def load_output(self, prefix:Path=None):
+        super().load_output(prefix)
 
-class iStarData(VisiumData):
-
-    def transfer_loc(self) -> pd.DataFrame:
-        df = self.locDF.copy(True)
-        df.columns = ["barcode","in_tissue","array_row","array_col","x","y"]
-        df = df[df["in_tissue"]==1]
-        del df["in_tissue"]
-        df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
-        return df
+class iStar(SRtools):
     
     def transfer_cnts(self,locDF:pd.DataFrame) -> pd.DataFrame:
         cntDF = pd.DataFrame(self.adata.X.toarray(), index=self.adata.obs_names, columns=self.adata.var_names)
@@ -310,31 +406,123 @@ class iStarData(VisiumData):
         mergedDF = pd.merge(locDF,cntDF, left_on='barcode', right_on='barcode', how='inner')
         return mergedDF.iloc[:, 5:]
 
-    def convert(self, image_index=0):
-        # save he-raw.jpg
-        ii.imsave(self.prefix/"he-raw.jpg", self.images[self.mask2image[image_index][1]])
+    def transfer_loc_base(self,scaleF) -> pd.DataFrame:
+        df = self.locDF.copy(True)
+        df.columns = ["barcode","in_tissue","array_row","array_col","y","x"]
+        df = df[df["in_tissue"]==1]
+        del df["in_tissue"]
+        df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
+        df = df.astype({"y": float, "x": float})
+        df.loc[:, ["y", "x"]] = df[["y", "x"]].values * scaleF
+        return df
+
+    def transfer_image_base(self, img:np.ndarray):
+        scalef = 16*self.pixel_size/self.super_pixel_size
+        img = image_resize(img, scalef=scalef)
+        H256 = (img.shape[0] + 255) // 256 * 256
+        W256 = (img.shape[1] + 255) // 256 * 256
+        img, _ = image_pad(img, (H256,W256))
+        return img, scalef
+
+    def transfer_mask_base(self, img:np.ndarray):
+        scalef = 16*self.pixel_size/self.super_pixel_size
+        img = image_resize(img, scalef=scalef)
+        H256 = (img.shape[0] + 255) // 256 * 256
+        W256 = (img.shape[1] + 255) // 256 * 256
+        img, _ = image_pad(img, (H256,W256))
+        H16 = H256//16; W16 = W256//16; 
+        img = image_resize(img, shape=(W16,H16))
+        _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
+        return img
+    
+    def transfer_image_HD(self, img:np.ndarray):
+        HDframe = self.HDData.profile.frame
+        H16 = (HDframe[0] + 15) // 16 * 16
+        W16 = (HDframe[1] + 15) // 16 * 16
+        corner = pd.DataFrame(
+            {
+                "id":[0,1,2,3],
+                "array_row":[0,0,1,1],
+                "array_col":[0,1,1,0],
+                "frame_row":[0,0,H16,H16],
+                "frame_col":[0,W16,W16,0]
+            }
+        )
+        image_profile = Profile(corner,(H16,W16))
+        transformer, HDbias = self.get_HDlikeImage(image_profile, mode="center")
+        HDlikeImage, _ = transformer.crop_image()
+        H256 = H16*16; W256 = W16*16
+        img = image_resize(HDlikeImage, shape=(W256,H256))
+        scalef = calculate_scale_factor(HDlikeImage, img)
+        return img, scalef, transformer, HDbias
+    
+    def transfer_mask_HD(self, img):
+        img, _, _, HDbias = self.transfer_image_HD(img)
+        _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
+        img = mask_outside_rectangle(img,(*HDbias,*self.HDData.profile.frame))
+        return img
+
+
+    def transfer_loc_HD(self, mapper:PerspectiveTransformer) -> pd.DataFrame:
+        df = self.locDF.copy(True)
+        df.columns = ["barcode","in_tissue","array_row","array_col","y","x"]
+        df = df[df["in_tissue"]==1]
+        del df["in_tissue"]
+        df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
+        df = df.astype({"y": float, "x": float})
+        df.loc[:, ["y", "x"]] = mapper.map_points(df[["y", "x"]].values)
+        return df
+
+    def convert(self):
+        if self.HDData == None:
+            image, scaleF = self.transfer_image_base(self.image)
+            mask = self.transfer_mask_base(self.mask)
+            locDF = self.transfer_loc_base(scaleF)
+        else:
+            image, scaleF, crop_mapper, HDbias = self.transfer_image_HD(self.image)
+            mask = self.transfer_mask_HD(self.mask)
+            locDF = self.transfer_loc_HD(crop_mapper)
+
+        ii.imsave(self.prefix/"he.jpg", image)
         # save mask-raw.png
-        mask = self.masks[self.mask2image[image_index][0]]
-        ii.imsave(self.prefix/"mask-raw.png", mask)
+        ii.imsave(self.prefix/"mask.png", mask)
+        # save spot locations
+        locDF[["spot","x","y"]].to_csv(self.prefix/"locs.tsv", sep="\t", index=False)
+
         # wirte number of pixels per spot radius
-        with open(self.prefix/"radius-raw.txt","w") as f:
-            f.write(str(self.scaleF["spot_diameter_fullres"]/2))
+        radius = self.scaleF["spot_diameter_fullres"]/2*scaleF
+        pixel_size_raw = self.pixel_size*scaleF
+        pixel_size = self.super_pixel_size/16
+        with open(self.prefix/"radius.txt","w") as f:
+            f.write(str(int(np.round(radius))))
         # write side length (in micrometers) of pixels
         with open(self.prefix/"pixel-size-raw.txt","w") as f:
-            f.write(str(self.scaleF["tissue_hires_scalef"]*4))
-            # f.write(str(65/scaleF["spot_diameter_fullres"]))
+            f.write(str(pixel_size_raw))
         with open(self.prefix/"pixel-size.txt", "w") as f:
-            f.write(str(self.pixel_size/16))
-        # save spot locations
-        locDF = self.transfer_loc()
-        locDF[["spot","x","y"]].to_csv(self.prefix/"locs-raw.tsv", sep="\t", index=False)
+            f.write(str(pixel_size))
         # save gene count matrix
         fast_to_csv(self.transfer_cnts(locDF),self.prefix/"cnts.tsv")
+    
+    def load_output(self, prefix:Path=None):
+        super().load_output(prefix)
+        mask = ii.imread(self.prefix/'mask.png')
+        # select genes
+        with open(self.prefix/'gene-names.txt', 'r') as file:
+            genes = [line.rstrip() for line in file]
+        # select unmasked super pixel 
+        Xs,Ys = np.where(mask)
+        self.image_shape = mask.shape[:2]
+        data = {"x":Xs, "y":Ys}
+        for gene in genes:
+            with open(self.prefix/f'cnts-super/{gene}.pickle', 'rb') as file:
+                cnts = pickle.load(file)
+            data[gene]=[float(f"{x:.8f}") for x in np.round(cnts[Xs, Ys], decimals=8)]
+        self.SRresult = pd.DataFrame(data)
 
-class soScopeData(VisiumData):
+class soScope(SRtools):
     pass
 
-class TESLAData(VisiumData):
+class TESLA(SRtools):
 
     def transfer_h5ad(self) -> AnnData:
         # select in tissue
@@ -348,11 +536,11 @@ class TESLAData(VisiumData):
         adata.obs = df
         return adata
 
-    def convert(self, image_index=0):
+    def convert(self):
         # save image.jpg
-        ii.imsave(self.prefix/"image.jpg", self.images[self.mask2image[image_index][1]])
+        ii.imsave(self.prefix/"image.jpg", self.image)
         # save mask.png
-        mask = self.masks[self.mask2image[image_index][0]]
+        mask = self.mask
         ii.imsave(self.prefix/"mask.png", mask,)
         # save data.h5ad
         self.transfer_h5ad().write_h5ad(self.prefix/"data.h5ad")
@@ -361,11 +549,19 @@ class TESLAData(VisiumData):
             scale = self.scaleF["tissue_hires_scalef"]*4/self.pixel_size
             f.write(str(int(np.round(1/scale))))
 
-class ImSpiREData(VisiumData):
+    def load_output(self, prefix:Path=None):
+        super().load_output(prefix)
+        adata = read_h5ad(self.prefix/"enhanced_exp.h5ad")
+        self.image_shape = adata.uns["shape"]
+        self.SRresult = adata.to_df()
+        self.SRresult.insert(0, 'y', adata.obs["y_spuer"].astype(int))
+        self.SRresult.insert(0, 'x', adata.obs["x_spuer"].astype(int))
+
+class ImSpiRE(SRtools):
     
-    def convert(self, image_index=0):
-        # save image.jpg
-        ii.imsave(self.prefix/"image.tif", self.images[self.mask2image[image_index][1]])
+    def convert(self):
+        # save image.tif
+        ii.imsave(self.prefix/"image.tif", self.image)
         # save h5
         write_10X_h5(self.adata, self.prefix/"filtered_feature_bc_matrix.h5", self.metadata)
         # copy spatial folder
@@ -374,3 +570,22 @@ class ImSpiREData(VisiumData):
         with open(self.prefix/"patch_size.txt","w") as f:
             scale = self.scaleF["tissue_hires_scalef"]*4/self.pixel_size
             f.write(str(int(np.round(1/scale))))
+
+    def load_output(self, prefix:Path=None):
+        super().load_output(prefix)
+        adata = read_h5ad(self.prefix/"result/result_ResolutionEnhancementResult.h5ad")
+        self.SRresult = adata.to_df()
+        locDF = pd.read_csv(self.prefix/"result/result_PatchLocations.txt", sep="\t",)
+        locDF.columns = ['index', 'row', 'col', 'pxl_row', 'pxl_col', 'in_tissue']
+        self.SRresult.index = self.SRresult.index.astype(int)
+        with open(self.prefix/'patch_size.txt') as f:
+            patch_size = int(f.read())
+        locDF["x"] = np.floor(locDF["pxl_row"]/patch_size).astype(int)
+        locDF["y"] = np.floor(locDF["pxl_col"]/patch_size).astype(int)
+        self.SRresult = pd.merge(locDF, self.SRresult, left_index=True, right_index=True).iloc[:, 6:]
+
+        image = ii.imread(self.prefix/'image.tif')
+        self.image_shape = [
+            int(image.shape[0]/patch_size),
+            int(image.shape[1]/patch_size),
+        ]
