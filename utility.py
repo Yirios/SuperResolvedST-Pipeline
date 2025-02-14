@@ -208,7 +208,6 @@ def image_pad(img, shape):
         right = pad_w - left
         return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT), (top,left)
 
-
 def mask_outside_rectangle(image, rect):
     """
     将指定矩形范围外的像素设为黑色
