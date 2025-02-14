@@ -490,7 +490,7 @@ class iStar(SRtools):
             image, scaleF, crop_mapper, HDsilde = self.transfer_image_HD(self.image)
             mask = self.transfer_mask_HD(self.mask)
             locDF = self.transfer_loc_HD(crop_mapper)
-            with open("self.prefix/VisiumHDbias.txt", 'w') as f:
+            with open(self.prefix/"VisiumHDbias.txt", 'w') as f:
                 f.write("\n".join(map(str,HDsilde)))
 
         ii.imsave(self.prefix/"he.jpg", image)
