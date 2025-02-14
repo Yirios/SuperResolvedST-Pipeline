@@ -15,6 +15,8 @@ import imageio.v2 as ii
 import tifffile
 from anndata import AnnData, read_h5ad
 from scipy.sparse import csr_matrix
+from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 
 from utility import *
 from profiles import *
@@ -96,6 +98,7 @@ class rawData:
             temp = self.locDF.set_index(["array_row", "array_col"])
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)
+            self.locDF = self.locDF[profile.RawColumes]
             # TODO match adata
         
         # map to image
@@ -124,7 +127,7 @@ class VisiumData(rawData):
         self.profile:VisiumProfile
 
     def _bin2image(self, profile:VisiumHDProfile, frame_center:Tuple[float, float]):
-        if not {"pxl_row_in_fullres", "pxl_col_in_fullres"} <= profile.tissue_positions.columns:
+        if {"pxl_row_in_fullres", "pxl_col_in_fullres"} <= set(profile.tissue_positions.columns):
             return profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]]
         
         x0 = frame_center[0]-self.profile.frame[1]/2
@@ -135,7 +138,7 @@ class VisiumData(rawData):
 
         return binsOnImage
 
-    def Visium2HD(self, HDprofile:VisiumHDProfile, SRmodel, **kwargs) -> "VisiumHDData":
+    def Visium2HD(self, HDprofile:VisiumHDProfile, **kwargs) -> "VisiumHDData":
 
         _, frame_center =  align_profile(HDprofile, self.profile, quiet=True, **kwargs)
         self._bin2image(HDprofile, frame_center)
@@ -165,6 +168,8 @@ class VisiumData(rawData):
             )
         superHD_demo.image = self.image
         superHD_demo.pixel_size = self.pixel_size
+        superHD_demo.profile = HDprofile
+        superHD_demo.bin_size = HDprofile.bin_size
 
         return superHD_demo
 
@@ -315,13 +320,11 @@ class SRtools(VisiumData):
             raise ValueError("The mask must have the same shape as the image.")
         return self.mask
     
-    def get_HDlikeImage(self, profile:Profile) -> PerspectiveTransformer:
-        x0 = profile.frame[1]//2 - self.HDData.profile.frame[1]//2
-        y0 = profile.frame[0]//2 - self.HDData.profile.frame[0]//2
-        cornerOnfarme = profile.tissue_positions[["frame_row","frame_col"]] - np.array([[x0,y0]])
+    def get_HDlikeImage(self, profile:Profile, img, bias) -> PerspectiveTransformer:
+        cornerOnfarme = profile.tissue_positions[["frame_row","frame_col"]] - np.array([bias])
         cornerOnImage = self.mapper.transform_batch(cornerOnfarme)
-        image_transformer = PerspectiveTransformer(self.image, corners=cornerOnImage)
-        return image_transformer, (x0,y0)
+        image_transformer = PerspectiveTransformer(img, corners=cornerOnImage)
+        return image_transformer
 
     def convert(self):
         super().save(self, self.prefix)
@@ -436,30 +439,35 @@ class iStar(SRtools):
         return img
     
     def transfer_image_HD(self, img:np.ndarray):
-        HDframe = self.HDData.profile.frame
-        H16 = (HDframe[0] + 15) // 16 * 16
-        W16 = (HDframe[1] + 15) // 16 * 16
+        num_row = self.HDData.profile.row_range
+        num_col = self.HDData.profile.col_range
+        H16 = (num_row + 15) // 16 * 16
+        W16 = (num_col + 15) // 16 * 16
+        HDdx = (H16-num_row)//2
+        HDdy = (W16-num_col)//2
+        Hframe = H16*self.HDData.bin_size; Wframe = W16*self.HDData.bin_size
         corner = pd.DataFrame(
             {
                 "id":[0,1,2,3],
                 "array_row":[0,0,1,1],
                 "array_col":[0,1,1,0],
-                "frame_row":[0,0,H16,H16],
-                "frame_col":[0,W16,W16,0]
+                "frame_row":[0,0,Hframe,Hframe],
+                "frame_col":[0,Wframe,Wframe,0]
             }
         )
-        image_profile = Profile(corner,(H16,W16))
-        transformer, HDbias = self.get_HDlikeImage(image_profile, mode="center")
+
+        image_profile = Profile(corner,(Wframe, Hframe))
+        transformer = self.get_HDlikeImage(image_profile, img,(HDdx*self.HDData.bin_size, HDdy*self.HDData.bin_size))
         HDlikeImage, _ = transformer.crop_image()
         H256 = H16*16; W256 = W16*16
         img = image_resize(HDlikeImage, shape=(W256,H256))
         scalef = calculate_scale_factor(HDlikeImage, img)
-        return img, scalef, transformer, HDbias
+        return img, scalef, transformer, (HDdx*16, HDdy*16, num_row*16, num_row*16)
     
     def transfer_mask_HD(self, img):
-        img, _, _, HDbias = self.transfer_image_HD(img)
+        img, _, _, HDsilde = self.transfer_image_HD(img)
         _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
-        img = mask_outside_rectangle(img,(*HDbias,*self.HDData.profile.frame))
+        img = mask_outside_rectangle(img, rect=HDsilde)
         return img
 
 
@@ -479,12 +487,14 @@ class iStar(SRtools):
             mask = self.transfer_mask_base(self.mask)
             locDF = self.transfer_loc_base(scaleF)
         else:
-            image, scaleF, crop_mapper, HDbias = self.transfer_image_HD(self.image)
+            image, scaleF, crop_mapper, HDsilde = self.transfer_image_HD(self.image)
             mask = self.transfer_mask_HD(self.mask)
             locDF = self.transfer_loc_HD(crop_mapper)
+            with open("self.prefix/VisiumHDbias.txt", 'w') as f:
+                f.write("\n".join(map(str,HDsilde)))
 
         ii.imsave(self.prefix/"he.jpg", image)
-        # save mask-raw.png
+        # save mask.png
         ii.imsave(self.prefix/"mask.png", mask)
         # save spot locations
         locDF[["spot","x","y"]].to_csv(self.prefix/"locs.tsv", sep="\t", index=False)

@@ -232,8 +232,8 @@ class PerspectiveTransformer:
         self.image = image
         self.corners = corners.astype("float32")
         self.warped_image = None
-        self.M = None       # 正向透视变换矩阵
-        self.M_inv = None   # 逆透视变换矩阵
+        self.M = None       # 正向透视变换矩阵（原图 -> warped）
+        self.M_inv = None   # 逆透视变换矩阵（warped -> 原图）
         if len(self.image.shape) == 2:
             self.channels = 1
         else:
@@ -241,8 +241,8 @@ class PerspectiveTransformer:
 
     def crop_image(self):
         """
-        利用给定的四个顶点裁剪并校正图像，
-        同时计算正向和逆向透视变换矩阵。
+        利用给定的四个顶点裁剪并校正图像，同时计算正向和逆向透视变换矩阵，
+        并使用 NumPy 实现透视变换，适合处理大图像。
 
         :return: 裁剪后的图像和正向透视变换矩阵 M
         """
@@ -256,65 +256,107 @@ class PerspectiveTransformer:
         heightB = np.linalg.norm(self.corners[0] - self.corners[3])
         maxHeight = int(max(heightA, heightB))
 
-        # 定义目标矩形的四个顶点
+        # 定义目标矩形的四个顶点（顺序：左上、右上、右下、左下）
         target_corner = np.array([
-            [0, 0],                         # 左上角
-            [0, maxHeight - 1],             # 右上角
-            [maxWidth - 1, maxHeight - 1],  # 右下角
-            [maxWidth - 1, 0]               # 右下角
+            [0, 0],                         # 左上
+            [0, maxWidth - 1],              # 右上
+            [maxHeight - 1, maxWidth - 1],    # 右下
+            [maxHeight - 1, 0]              # 左下
         ], dtype="float32")
 
         # 计算正向透视变换矩阵 M
         self.M = cv2.getPerspectiveTransform(self.corners, target_corner)
-        # 利用 M 进行透视变换，得到裁剪并校正后的图像
+        # 计算逆透视变换矩阵，用于将 warped 图像中的点映射回原图
+        self.M_inv = np.linalg.inv(self.M)
+
+        # 利用 NumPy 实现透视变换
+        self.warped_image = self.warp_image_numpy(maxWidth, maxHeight)
+        return self.warped_image, self.M
+
+    def warp_image_numpy(self, maxWidth: int, maxHeight: int):
+        """
+        使用 NumPy 实现透视变换。
+        为目标图像的每个像素计算其在源图像中的位置（使用 M_inv），
+        然后采用最近邻插值进行采样，不在源图范围内的像素填充为边界颜色。
+
+        :param maxWidth: 输出图像宽度
+        :param maxHeight: 输出图像高度
+        :return: 裁剪并校正后的图像
+        """
+        # 创建目标图像的网格坐标（注意顺序：x 对应列，y 对应行）
+        xv, yv = np.meshgrid(np.arange(maxWidth), np.arange(maxHeight))
+        ones = np.ones_like(xv)
+        # 构造齐次坐标矩阵，形状为 (3, N)，其中 N = maxWidth*maxHeight
+        dest_coords = np.stack([xv, yv, ones], axis=0).reshape(3, -1)
+
+        # 利用逆矩阵将目标坐标映射回原图中的坐标（齐次坐标）
+        src_coords_hom = self.M_inv.dot(dest_coords)
+        src_coords_hom /= src_coords_hom[2:3, :]  # 归一化
+
+        # 提取原图中的 x 和 y 坐标
+        src_x = src_coords_hom[0, :]
+        src_y = src_coords_hom[1, :]
+
+        # 采用最近邻插值
+        src_x_round = np.round(src_x).astype(np.int64)
+        src_y_round = np.round(src_y).astype(np.int64)
+
+        H_src, W_src = self.image.shape[:2]
+
+        # 根据图像通道数确定边界填充值：单通道为 0，彩色图像填充白色
         if self.channels == 1:
             borderValue = 0
+            warped = np.full((maxHeight, maxWidth), borderValue, dtype=self.image.dtype)
         else:
-            borderValue = tuple([255] * self.image.shape[2])
-        self.warped_image = cv2.warpPerspective(self.image, self.M,
-                                                (maxWidth, maxHeight),
-                                                borderValue=borderValue)
-        # 计算逆向透视变换矩阵，用于将 warped 图像中的点映射回原图
-        self.M_inv = np.linalg.inv(self.M)
-        return self.warped_image, self.M
+            borderValue = tuple([255] * self.channels)
+            warped = np.full((maxHeight, maxWidth, self.channels), borderValue, dtype=self.image.dtype)
+
+        # 检查源坐标是否在有效范围内
+        valid = (src_x_round >= 0) & (src_x_round < W_src) & \
+                (src_y_round >= 0) & (src_y_round < H_src)
+        valid = valid.reshape(-1)
+
+        # 获取有效位置在目标图像中的行列索引
+        dest_indices = np.nonzero(valid)[0]
+        dest_x_flat = xv.flatten()[dest_indices]
+        dest_y_flat = yv.flatten()[dest_indices]
+
+        # 获取对应有效位置在源图像中的坐标
+        valid_src_x = src_x_round.reshape(-1)[dest_indices]
+        valid_src_y = src_y_round.reshape(-1)[dest_indices]
+
+        # 将源图像像素值复制到目标图像
+        if self.channels == 1:
+            warped[dest_y_flat, dest_x_flat] = self.image[valid_src_y, valid_src_x]
+        else:
+            warped[dest_y_flat, dest_x_flat, :] = self.image[valid_src_y, valid_src_x, :]
+
+        return warped
 
     def reverse_map_points(self, points: np.ndarray) -> np.ndarray:
         """
         批量将 warped 图像中的点反向映射回原图像
 
         :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
-        :return: 映射回原图像后的点的 numpy 数组，形状为 (N, 2)
+        :return: 映射回原图像后的点，形状为 (N, 2)
         """
         if self.M_inv is None:
             raise ValueError("请先调用 crop_image 方法计算透视变换矩阵。")
-
-        # 将点转换为齐次坐标 (x, y, 1)
         ones = np.ones((points.shape[0], 1))
         homogeneous_points = np.hstack([points, ones])
-        
-        # 利用逆矩阵映射
         mapped_points = homogeneous_points.dot(self.M_inv.T)
-        
-        # 归一化（除以第三个分量）
         mapped_points /= mapped_points[:, 2][:, np.newaxis]
         return mapped_points[:, :2]
-    
+
     def map_points(self, points: np.ndarray) -> np.ndarray:
         """
         将原图中的多个点映射到透视变换后的图像中
 
         :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
-        :return: 映射后的点的 numpy 数组，形状为 (N, 2)
+        :return: 映射后的点，形状为 (N, 2)
         """
-        # 将每个点扩展为齐次坐标 (x, y, 1)
         ones = np.ones((points.shape[0], 1))
-        homogeneous_points = np.hstack((points, ones))  # 形状 (N, 3)
-        
-        # 使用矩阵乘法进行映射（注意使用 M 的转置）
-        mapped_points = homogeneous_points.dot(self.M.T)  # 形状 (N, 3)
-        
-        # 对每个点归一化（除以第三个分量）
+        homogeneous_points = np.hstack((points, ones))
+        mapped_points = homogeneous_points.dot(self.M.T)
         mapped_points /= mapped_points[:, 2, np.newaxis]
-        
-        # 返回前两列，即映射后的 (x, y)
         return mapped_points[:, :2]
