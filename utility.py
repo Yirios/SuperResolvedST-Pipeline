@@ -197,7 +197,7 @@ def calculate_scale_factor(original, target):
     # 选择较小的缩放比例以保持图像纵横比
     scale_factor = np.linalg.norm([width_scale, height_scale]) / np.sqrt(2)
 
-    return scale_factor
+    return scale_factor, (width_scale, scale_factor)
 
 def image_pad(img, shape):
         pad_h = shape[0] - img.shape[0]
@@ -259,13 +259,13 @@ class PerspectiveTransformer:
         # 定义目标矩形的四个顶点（顺序：左上、右上、右下、左下）
         target_corner = np.array([
             [0, 0],                         # 左上
-            [0, maxWidth - 1],              # 右上
+            [0, maxWidth - 1,],              # 右上
             [maxHeight - 1, maxWidth - 1],    # 右下
             [maxHeight - 1, 0]              # 左下
         ], dtype="float32")
 
         # 计算正向透视变换矩阵 M
-        self.M = cv2.getPerspectiveTransform(self.corners, target_corner)
+        self.M = cv2.getPerspectiveTransform(self.corners[:,::-1], target_corner[:,::-1],)
         # 计算逆透视变换矩阵，用于将 warped 图像中的点映射回原图
         self.M_inv = np.linalg.inv(self.M)
 
@@ -355,8 +355,34 @@ class PerspectiveTransformer:
         :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
         :return: 映射后的点，形状为 (N, 2)
         """
-        ones = np.ones((points.shape[0], 1))
-        homogeneous_points = np.hstack((points, ones))
+        # 交换 (x, y) 到 (y, x)
+        swapped_points = points[:, ::-1].astype(np.float32)
+        ones = np.ones((swapped_points.shape[0], 1), dtype=np.float32)
+        homogeneous_points = np.hstack([swapped_points, ones])  # 形状 (N, 3)
+        
+        # 计算透视变换后的坐标
         mapped_points = homogeneous_points.dot(self.M.T)
-        mapped_points /= mapped_points[:, 2, np.newaxis]
-        return mapped_points[:, :2]
+        # 避免数值不稳定，直接用浮点数除法归一化
+        mapped_points /= mapped_points[:, 2:3]
+        # 交换回来得到 (x, y)
+        return mapped_points[:, :2][:, ::-1]
+
+
+import cv2
+import numpy as np
+
+def draw_points(image: np.ndarray, points: np.ndarray, radius: int = 3, color: tuple = (0, 255, 0), thickness: int = -1) -> np.ndarray:
+    """
+    在图像上批量绘制点
+
+    :param image: 输入图像（numpy 数组）
+    :param points: 点的坐标数组，形状为 (N, 2)，每个点的格式为 (x, y)
+    :param radius: 绘制点的半径，默认为 3
+    :param color: 绘制点的颜色，默认为绿色 (B, G, R) 格式
+    :param thickness: 点的线宽，-1 表示填充（实心圆）
+    :return: 绘制完点的图像
+    """
+    # 遍历所有点，并在图像上绘制
+    for pt in points:
+        cv2.circle(image, tuple(pt), radius, color, thickness)
+    return image

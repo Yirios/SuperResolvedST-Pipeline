@@ -126,13 +126,20 @@ class VisiumData(rawData):
         self.match2profile(profile)
         self.profile:VisiumProfile
 
+    def vision_spots(self):
+        image = self.image.copy()
+        spots = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        for pt in spots:
+            cv2.circle(image, tuple(pt), 50, (255,0,0), -1)
+        return image
+    
     def _bin2image(self, profile:VisiumHDProfile, frame_center:Tuple[float, float]):
         if {"pxl_row_in_fullres", "pxl_col_in_fullres"} <= set(profile.tissue_positions.columns):
             return profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]]
         
         x0 = frame_center[0]-self.profile.frame[1]/2
         y0 = frame_center[1]-self.profile.frame[0]/2
-        binsOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values + np.array([[x0,y0]])
+        binsOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values - np.array([[x0,y0]])
         binsOnImage = self.mapper.transform_batch(binsOnFrame)
         profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = binsOnImage
 
@@ -140,7 +147,7 @@ class VisiumData(rawData):
 
     def Visium2HD(self, HDprofile:VisiumHDProfile, **kwargs) -> "VisiumHDData":
 
-        _, frame_center =  align_profile(HDprofile, self.profile, quiet=True, **kwargs)
+        _, frame_center =  align_profile(HDprofile, self.profile, **kwargs)
         self._bin2image(HDprofile, frame_center)
 
         # Get demo VisiumHD: without feature_bc_matrix
@@ -168,8 +175,8 @@ class VisiumData(rawData):
             )
         superHD_demo.image = self.image
         superHD_demo.pixel_size = self.pixel_size
-        superHD_demo.profile = HDprofile
         superHD_demo.bin_size = HDprofile.bin_size
+        superHD_demo.match2profile(HDprofile)
 
         return superHD_demo
 
@@ -198,6 +205,13 @@ class VisiumHDData(rawData):
         '''
         pass
 
+
+    def get_HDlikeImage(self, profile:Profile, img, bias) -> PerspectiveTransformer:
+        cornerOnfarme = profile.tissue_positions[["frame_row","frame_col"]] - np.array([bias])
+        cornerOnImage = self.mapper.transform_batch(cornerOnfarme)
+        image_transformer = PerspectiveTransformer(img, corners=cornerOnImage)
+        return image_transformer
+    
     def _spot2image(self, profile:VisiumProfile, frame_center:Tuple[float, float]):
         '''\
         add pxl_row_in_fullres, pxl_col_in_fullres in profile.tissue_positions
@@ -320,11 +334,6 @@ class SRtools(VisiumData):
             raise ValueError("The mask must have the same shape as the image.")
         return self.mask
     
-    def get_HDlikeImage(self, profile:Profile, img, bias) -> PerspectiveTransformer:
-        cornerOnfarme = profile.tissue_positions[["frame_row","frame_col"]] - np.array([bias])
-        cornerOnImage = self.mapper.transform_batch(cornerOnfarme)
-        image_transformer = PerspectiveTransformer(img, corners=cornerOnImage)
-        return image_transformer
 
     def convert(self):
         super().save(self, self.prefix)
@@ -344,9 +353,12 @@ class SRtools(VisiumData):
         print("Finish convert")
     
     def load_output(self, prefix:Path=None):
+        '''
+        if self.prefix exist, will be recovered 
+        '''
         if not (self.prefix or prefix):
             raise ValueError("Run save_inpout frist or set prefix")
-        else: # will recover the old prefix
+        else: 
             self.prefix = prefix
         if not self.super_pixel_size:
             with open(self.prefix/"super-pixel-size.txt","r") as f:
@@ -409,14 +421,13 @@ class iStar(SRtools):
         mergedDF = pd.merge(locDF,cntDF, left_on='barcode', right_on='barcode', how='inner')
         return mergedDF.iloc[:, 5:]
 
-    def transfer_loc_base(self,scaleF) -> pd.DataFrame:
+    def transfer_loc_base(self, scaleF) -> pd.DataFrame:
         df = self.locDF.copy(True)
         df.columns = ["barcode","in_tissue","array_row","array_col","y","x"]
         df = df[df["in_tissue"]==1]
         del df["in_tissue"]
         df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
-        df = df.astype({"y": float, "x": float})
-        df.loc[:, ["y", "x"]] = df[["y", "x"]].values * scaleF
+        df.loc[:, ["y", "x"]] = (df[["y", "x"]].values * scaleF).astype(int)
         return df
 
     def transfer_image_base(self, img:np.ndarray):
@@ -457,28 +468,29 @@ class iStar(SRtools):
         )
 
         image_profile = Profile(corner,(Wframe, Hframe))
-        transformer = self.get_HDlikeImage(image_profile, img,(HDdx*self.HDData.bin_size, HDdy*self.HDData.bin_size))
+        transformer = self.HDData.get_HDlikeImage(image_profile, img,(HDdx*self.HDData.bin_size, HDdy*self.HDData.bin_size))
         HDlikeImage, _ = transformer.crop_image()
         H256 = H16*16; W256 = W16*16
         img = image_resize(HDlikeImage, shape=(W256,H256))
-        scalef = calculate_scale_factor(HDlikeImage, img)
-        return img, scalef, transformer, (HDdx*16, HDdy*16, num_row*16, num_row*16)
+        scalef, scalefyx = calculate_scale_factor(HDlikeImage, img)
+        return img, scalef, scalefyx, transformer, (HDdx*16, HDdy*16, num_row*16, num_row*16)
     
     def transfer_mask_HD(self, img):
-        img, _, _, HDsilde = self.transfer_image_HD(img)
+        img, _, _, _, HDsilde = self.transfer_image_HD(img)
         _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
         img = mask_outside_rectangle(img, rect=HDsilde)
         return img
 
-
-    def transfer_loc_HD(self, mapper:PerspectiveTransformer) -> pd.DataFrame:
+    def transfer_loc_HD(self, mapper:PerspectiveTransformer, scaleFyx) -> pd.DataFrame:
         df = self.locDF.copy(True)
         df.columns = ["barcode","in_tissue","array_row","array_col","y","x"]
         df = df[df["in_tissue"]==1]
         del df["in_tissue"]
         df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
         df = df.astype({"y": float, "x": float})
-        df.loc[:, ["y", "x"]] = mapper.map_points(df[["y", "x"]].values)
+        df.loc[:, ["y", "x"]] = mapper.map_points(df[["y", "x"]].values) 
+        df["x"] = np.round(df["x"] * scaleFyx[0]).astype(int)
+        df["y"] = np.round(df["x"] * scaleFyx[0]).astype(int)
         return df
 
     def convert(self):
@@ -487,9 +499,9 @@ class iStar(SRtools):
             mask = self.transfer_mask_base(self.mask)
             locDF = self.transfer_loc_base(scaleF)
         else:
-            image, scaleF, crop_mapper, HDsilde = self.transfer_image_HD(self.image)
+            image, scaleF, scaleFyx, crop_mapper, HDsilde = self.transfer_image_HD(self.image)
             mask = self.transfer_mask_HD(self.mask)
-            locDF = self.transfer_loc_HD(crop_mapper)
+            locDF = self.transfer_loc_HD(crop_mapper, scaleFyx)
             with open(self.prefix/"VisiumHDbias.txt", 'w') as f:
                 f.write("\n".join(map(str,HDsilde)))
 
@@ -513,12 +525,20 @@ class iStar(SRtools):
         # save gene count matrix
         fast_to_csv(self.transfer_cnts(locDF),self.prefix/"cnts.tsv")
     
+    def load_output_base(self):
+        pass
+
+    def load_output_HD(self):
+        pass
+
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
         mask = ii.imread(self.prefix/'mask.png')
         # select genes
         with open(self.prefix/'gene-names.txt', 'r') as file:
             genes = [line.rstrip() for line in file]
+        if self.prefix/'':
+            pass
         # select unmasked super pixel 
         Xs,Ys = np.where(mask)
         self.image_shape = mask.shape[:2]
