@@ -34,12 +34,12 @@ class VisiumProfile(Profile):
         self.spot_step = 100.0
         if slide_serial in VisiumProfile.SERIAL_SMALL:
             # even numbers from 0 to 126 for even rows, and odd numbers from 1 to 127 for odd rows with each row (even or odd) resulting in 64 spots.
-            self.row_range = 64
-            self.col_range = 78
+            self.row_range = 78
+            self.col_range = 64
         elif slide_serial in VisiumProfile.SERIAL_LARGE:
             # even numbers from 0 to 222 for even rows, and odd numbers from 1 to 223 for odd rows with each row (even or odd) resulting in 111 spots.
-            self.row_range = 111
-            self.col_range = 128
+            self.row_range = 128
+            self.col_range = 111
         else:
             raise ValueError("Unsupported version")
         self.serial = slide_serial
@@ -60,17 +60,25 @@ class VisiumProfile(Profile):
         -------
         tuple of (width:float, height:float)
         """
-        w = self.spot_step * (self.row_range-0.5) + self.spot_diameter
-        h = self.spot_step * (self.col_range-1) * math.sqrt(3)/2 + self.spot_diameter
+        w = self.spot_step * (self.col_range-0.5) + self.spot_diameter
+        h = self.spot_step * (self.row_range-1) * math.sqrt(3)/2 + self.spot_diameter
         return w, h
     
     @property
     def spots(self):
         id = 0
-        for i in range(self.col_range):
-            for j in range(self.row_range):
-                yield id, (i,j), self[i,j]
-                id += 1
+        if self.serial == 4:
+            for i in range(self.row_range):
+                for j in range(self.col_range):
+                    yield id, (i,j), self[i,j]
+                    id += 1
+        elif self.serial == 1:
+            for i_half in range(0,self.row_range,2):
+                for j_dou in range(self.col_range*2):
+                    i = i_half + j_dou%2
+                    j = j_dou // 2
+                    yield id, (i,j), self[i,j]
+                    id += 1
     
     def __len__(self):
         return self.row_range*self.col_range
@@ -109,8 +117,12 @@ class VisiumProfile(Profile):
         -------
         tuple of (array_row:int, array_col:int)
         """
-        array_row = id//self.row_range
-        array_col = 2 * (id%self.row_range) + array_row%2
+        if self.serial == 4:
+            array_row = id//self.col_range
+            array_col = 2 * (id%self.col_range) + array_row%2
+        else:
+            array_row2, array_col = id//(self.col_range*2), id%(self.col_range*2)
+            array_row = 2*array_row2 + array_col%2
         return array_row, array_col
     
     def set_bins(self, profile:"VisiumHDProfile", mode="adaptive", **kwargs) -> Tuple[np.ndarray,Tuple[float,float]]:
@@ -291,7 +303,7 @@ def align_profile(HDprofile:VisiumHDProfile, profile:VisiumProfile, mode="center
             for i, j in product(bin_iter(x), bin_iter(y)):
                 bin_x, bin_y, _ = HDprofile[i,j]
                 if d2(bin_x,bin_y,x,y) < r*r:
-                    if i<0 or j<0 or i>HDprofile.col_range-1 or j>HDprofile.row_range-1:
+                    if i<0 or j<0 or i>HDprofile.row_range-1 or j>HDprofile.col_range-1:
                         uncovered[id] += 1
                     else:
                         spot_label_image[i,j] = id + 1

@@ -1,9 +1,9 @@
 
-import json
 from pathlib import Path
 import pickle
 from typing import List, Dict, Tuple
 from itertools import product
+from datetime import datetime
 import shutil
 
 import numpy as np
@@ -48,17 +48,14 @@ class rawData:
 
     def _read_scalefactors(self) -> Dict:
         file = self.path/"spatial/scalefactors_json.json"
-        with open(file) as f:
-            self.scaleF = json.load(f)
+        self.scaleF = read_json(file)
         return self.scaleF
 
     def _read_feature_bc_matrix(self) -> AnnData:
         file = self.path/"filtered_feature_bc_matrix.h5"
         self.adata = sc.read_10x_h5(file)
-        # self.adata.var_names_make_unique()
         with h5py.File(file, mode="r") as f:
             self.metadata = dict(f.attrs)
-        sc.pp.filter_genes(self.adata, min_counts=10)
 
     def read_image(self, file:Path):
         self.image = tifffile.imread(file)
@@ -82,8 +79,7 @@ class rawData:
         # spatial output
         (path/"spatial").mkdir(parents=True, exist_ok=True)
         self.locDF.to_csv(path/"spatial/tissue_positions.csv", index=False, header=False)
-        with open(path/"spatial/scalefactors_json.json", "w") as f:
-            json.dump(self.scaleF, f, ensure_ascii=False, indent=4)
+        write_json(path/"spatial/scalefactors_json.json", self.scaleF)
         lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
         ii.imsave(path/"spatial/tissue_lowres_image.png", lowres_image)
         hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
@@ -95,11 +91,11 @@ class rawData:
         order = self.profile.tissue_positions[["array_row", "array_col"]].values.tolist()
         raw_order = self.locDF[["array_row", "array_col"]].values.tolist()
         if not np.array_equal(order, raw_order):
+            print("test")
             temp = self.locDF.set_index(["array_row", "array_col"])
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)
             self.locDF = self.locDF[profile.RawColumes]
-            # TODO match adata
         
         # map to image
         PointsOnFrame = self.profile.tissue_positions[["frame_row","frame_col"]].values
@@ -107,7 +103,9 @@ class rawData:
         self.mapper = AffineTransform(PointsOnFrame, PointsOnImage)
         self.pixel_size = self.mapper.resolution
 
-    def select_HVG(self,n_top_genes=2000) -> None:
+    def select_HVG(self,n_top_genes=2000, min_counts=10) -> None:
+        self.adata.var_names_make_unique()
+        sc.pp.filter_genes(self.adata, min_counts=min_counts)
         sc.pp.highly_variable_genes(self.adata, n_top_genes=n_top_genes, subset=True, flavor='seurat_v3')
 
     def require_genes(self,genes:List[str]) -> None:
@@ -164,9 +162,15 @@ class VisiumData(rawData):
             "tissue_hires_scalef": HDprofile.HiresImage/FullImage,
             "regist_target_img_scalef": HDprofile.HiresImage/FullImage,
         }
-        adata = AnnData()
+
+        adata = AnnData(
+            X=csr_matrix((0, len(self.adata.var))),
+            var=self.adata.var
+        )
+
         cols = [col for col in HDprofile.RawColumes if col != "in_tissue"]
         tissue_positions = HDprofile.tissue_positions[cols].copy()
+        tissue_positions["in_tissue"] = np.repeat(0,len(tissue_positions))
         superHD_demo = VisiumHDData(
                 tissue_positions = tissue_positions,
                 feature_bc_matrix = adata,
@@ -307,7 +311,10 @@ class SRtools(VisiumData):
         self.super_pixel_size:float = None
         self.HDData:VisiumHDData = None
         self.mask:np.ndarray = None
+
         self.SRresult:pd.DataFrame = None
+        self.super_image_shape = [None, None]
+        self.capture_area = [None, None, None, None]
 
     def set_super_pixel_size(self, super_pixel_size:float=8.0):
         self.super_pixel_size = super_pixel_size
@@ -339,6 +346,27 @@ class SRtools(VisiumData):
         super().save(self, self.prefix)
         ii.imsave(self.prefix/"mask.png", self.mask)
 
+    def save_params(self):
+        parameters = {
+            "mode": "VisiumHD" if self.HDData else "Image",
+            "super_resolution_tool":type(self).__name__,
+            "super_image_shape": list(self.super_image_shape),
+            "super_pixel_size":self.super_pixel_size,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "project_dir": str(self.prefix.resolve())
+        }
+        if self.capture_area:
+            parameters["capture_area"] = self.capture_area
+        else:
+            parameters["capture_area"] = [0,0,*self.super_image_shape]
+        write_json(self.prefix/"super_resolution_config.json",parameters)
+
+    def load_params(self):
+        parameters = read_json(self.prefix/"super_resolution_config.json")
+        self.super_pixel_size = parameters["super_pixel_size"]
+        self.super_image_shape = parameters["super_image_shape"]
+        self.capture_area = parameters["capture_area"]
+
     def save_inpout(self, prefix:Path):
         prefix.mkdir(parents=True, exist_ok=True)
         self.prefix = prefix
@@ -346,10 +374,8 @@ class SRtools(VisiumData):
         # write selected gene names
         with open(self.prefix/"gene-names.txt","w") as f:
             f.write("\n".join(self.adata.var.index.values))
-        # write super pixel size
-        with open(self.prefix/"super-pixel-size.txt","w") as f:
-            f.write(str(self.super_pixel_size))
         self.convert()
+        self.save_params()
         print("Finish convert")
     
     def load_output(self, prefix:Path=None):
@@ -360,15 +386,18 @@ class SRtools(VisiumData):
             raise ValueError("Run save_inpout frist or set prefix")
         else: 
             self.prefix = prefix
-        if not self.super_pixel_size:
-            with open(self.prefix/"super-pixel-size.txt","r") as f:
-                self.super_pixel_size = float(f.read())
+        self.load_params()
     
     @timer
-    def to_VisiumHD(self, superHD_demo:VisiumHDData, HDprefix:Path):
+    def to_VisiumHD(self, HDprefix:Path, superHD_demo:VisiumHDData=None):
+        if not (self.HDData or superHD_demo ):
+            raise ValueError()
+        else:
+            self.HDData = superHD_demo
         superHD_demo.adata
         superHD_demo.locDF
-        superHD_demo.save(HDprefix)
+
+        self.HDData.save(HDprefix)
 
     @timer
     def to_csv(self, file=None, sep="\t"):
@@ -376,8 +405,8 @@ class SRtools(VisiumData):
             file = self.prefix/"super-resolution.csv"
         with open(file, "w") as f:
             header = self.SRresult.columns.to_list()
-            header[0] = f"x:{self.image_shape[0]}"
-            header[1] = f"y:{self.image_shape[1]}"
+            header[0] = f"x:{self.super_image_shape[0]}"
+            header[1] = f"y:{self.super_image_shape[1]}"
             f.write(sep.join(header) + "\n")
             for _, row in self.SRresult.iterrows():
                 f.write(sep.join(map(str, row)) + "\n")
@@ -387,7 +416,7 @@ class SRtools(VisiumData):
         adata = AnnData(self.SRresult.iloc[:,2:])
         adata.obs = self.SRresult.iloc[:, :2]
         adata.var.index = self.SRresult.columns[2:]
-        adata.uns["shape"] = list(self.image_shape)
+        adata.uns["shape"] = list(self.super_image_shape)
         adata.uns["project_dir"] = str(self.prefix.resolve())
         adata.write_h5ad(self.prefix/"super-resolution.h5ad")
 
@@ -444,7 +473,8 @@ class iStar(SRtools):
         H256 = (img.shape[0] + 255) // 256 * 256
         W256 = (img.shape[1] + 255) // 256 * 256
         img, _ = image_pad(img, (H256,W256))
-        H16 = H256//16; W16 = W256//16; 
+        H16 = H256//16
+        W16 = W256//16
         img = image_resize(img, shape=(W16,H16))
         _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
         return img
@@ -470,15 +500,17 @@ class iStar(SRtools):
         image_profile = Profile(corner,(Wframe, Hframe))
         transformer = self.HDData.get_HDlikeImage(image_profile, img,(HDdx*self.HDData.bin_size, HDdy*self.HDData.bin_size))
         HDlikeImage, _ = transformer.crop_image()
-        H256 = H16*16; W256 = W16*16
+        H256 = H16*16
+        W256 = W16*16
         img = image_resize(HDlikeImage, shape=(W256,H256))
         scalef, scalefyx = calculate_scale_factor(HDlikeImage, img)
-        return img, scalef, scalefyx, transformer, (HDdx*16, HDdy*16, num_row*16, num_row*16)
+        capture_area = (HDdx*16, HDdy*16, num_row*16, num_col*16)
+        return img, scalef, scalefyx, transformer, capture_area
     
     def transfer_mask_HD(self, img):
-        img, _, _, _, HDsilde = self.transfer_image_HD(img)
+        img, _, _, _, capture_area = self.transfer_image_HD(img)
         _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
-        img = mask_outside_rectangle(img, rect=HDsilde)
+        img = mask_outside_rectangle(img, rect=capture_area)
         return img
 
     def transfer_loc_HD(self, mapper:PerspectiveTransformer, scaleFyx) -> pd.DataFrame:
@@ -498,13 +530,14 @@ class iStar(SRtools):
             image, scaleF = self.transfer_image_base(self.image)
             mask = self.transfer_mask_base(self.mask)
             locDF = self.transfer_loc_base(scaleF)
+            self.super_image_shape = mask.shape
         else:
-            image, scaleF, scaleFyx, crop_mapper, HDsilde = self.transfer_image_HD(self.image)
+            image, scaleF, scaleFyx, crop_mapper, capture_area = self.transfer_image_HD(self.image)
             mask = self.transfer_mask_HD(self.mask)
             locDF = self.transfer_loc_HD(crop_mapper, scaleFyx)
-            with open(self.prefix/"VisiumHDbias.txt", 'w') as f:
-                f.write("\n".join(map(str,HDsilde)))
-
+            self.super_image_shape = [i//16 for i in mask.shape]
+            self.capture_area = [i//16 for i in capture_area]
+            
         ii.imsave(self.prefix/"he.jpg", image)
         # save mask.png
         ii.imsave(self.prefix/"mask.png", mask)
@@ -524,12 +557,10 @@ class iStar(SRtools):
             f.write(str(pixel_size))
         # save gene count matrix
         fast_to_csv(self.transfer_cnts(locDF),self.prefix/"cnts.tsv")
-    
-    def load_output_base(self):
-        pass
 
-    def load_output_HD(self):
-        pass
+    def corp_capture_area(self, img):
+        top,left,heigth,width = self.capture_area
+        return img[top:top+heigth,left:left+width]
 
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
@@ -537,16 +568,20 @@ class iStar(SRtools):
         # select genes
         with open(self.prefix/'gene-names.txt', 'r') as file:
             genes = [line.rstrip() for line in file]
-        if self.prefix/'':
-            pass
+
+        if mask.shape != self.super_image_shape:
+            mask = image_resize(mask, shape=self.super_image_shape)
+        mask = self.corp_capture_area(mask)
+        mask = mask > 127
+
         # select unmasked super pixel 
         Xs,Ys = np.where(mask)
-        self.image_shape = mask.shape[:2]
         data = {"x":Xs, "y":Ys}
         for gene in genes:
             with open(self.prefix/f'cnts-super/{gene}.pickle', 'rb') as file:
                 cnts = pickle.load(file)
-            data[gene]=[float(f"{x:.8f}") for x in np.round(cnts[Xs, Ys], decimals=8)]
+            data[gene]=[x for x in np.round(cnts[Xs, Ys], decimals=8)]
+            # data[gene]=[float(f"{x:.8f}") for x in np.round(cnts[Xs, Ys], decimals=8)]
         self.SRresult = pd.DataFrame(data)
 
 class soScope(SRtools):
@@ -582,7 +617,6 @@ class TESLA(SRtools):
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
         adata = read_h5ad(self.prefix/"enhanced_exp.h5ad")
-        self.image_shape = adata.uns["shape"]
         self.SRresult = adata.to_df()
         self.SRresult.insert(0, 'y', adata.obs["y_spuer"].astype(int))
         self.SRresult.insert(0, 'x', adata.obs["x_spuer"].astype(int))
@@ -613,9 +647,3 @@ class ImSpiRE(SRtools):
         locDF["x"] = np.floor(locDF["pxl_row"]/patch_size).astype(int)
         locDF["y"] = np.floor(locDF["pxl_col"]/patch_size).astype(int)
         self.SRresult = pd.merge(locDF, self.SRresult, left_index=True, right_index=True).iloc[:, 6:]
-
-        image = ii.imread(self.prefix/'image.tif')
-        self.image_shape = [
-            int(image.shape[0]/patch_size),
-            int(image.shape[1]/patch_size),
-        ]

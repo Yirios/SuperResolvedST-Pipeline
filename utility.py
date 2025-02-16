@@ -10,7 +10,16 @@ import pandas as pd
 import cv2
 import h5py
 from anndata import AnnData
+import json
 
+def write_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def read_json(filename):
+    with open(filename, "r", encoding="utf-8") as f:
+        return json.load(f)
+    
 def timer(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -208,7 +217,7 @@ def image_pad(img, shape):
         right = pad_w - left
         return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT), (top,left)
 
-def mask_outside_rectangle(image, rect):
+def mask_outside_rectangle(image, rect) -> np.ndarray:
     """
     将指定矩形范围外的像素设为黑色
     :param image: 单通道图像
