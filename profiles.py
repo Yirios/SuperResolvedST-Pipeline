@@ -13,7 +13,7 @@ from utility import hash_to_dna
 class Profile:
     LowresImage = 600
     HiresImage = [2000,None,None,2000,4000]
-    RawColumes = ["barcode","in_tissue","array_row","array_col","pxl_row_in_fullres","pxl_col_in_fullres"]
+    RawColumns = ["barcode","in_tissue","array_row","array_col","pxl_row_in_fullres","pxl_col_in_fullres"]
     def __init__(self, tissue_positions:pd.DataFrame, frame:Tuple[float,float]):
         '''\
         The tissue_positions variable is a pandas DataFrame containing the following columns:

@@ -43,7 +43,7 @@ class rawData:
     def _read_location(self) -> pd.DataFrame:
         file = self.path/"spatial/tissue_positions.csv"
         self.locDF = pd.read_csv(file,header=None)
-        self.locDF.columns = Profile.RawColumes
+        self.locDF.columns = Profile.RawColumns
         return self.locDF
 
     def _read_scalefactors(self) -> Dict:
@@ -69,21 +69,33 @@ class rawData:
         if source_image_path :
             self.read_image(Path(source_image_path))
 
-    @timer
-    def save(self, path:Path):
-        path.mkdir(parents=True, exist_ok=True)
-        # feature_bc_matrix
-        write_10X_h5(self.adata, path/'filtered_feature_bc_matrix.h5', self.metadata)
+    def _save_location(self,path):
+        self.locDF.to_csv(path/"spatial/tissue_positions.csv", index=False, header=False)
+
+    def _save_scalefactors(self, path):
+        write_json(path/"spatial/scalefactors_json.json", self.scaleF)
+
+    def _save_feature_bc_matrix(self, path):
+        file = path/'filtered_feature_bc_matrix.h5'
+        write_10X_h5(self.adata, file, self.metadata)
+
+    def _save_images(self, path):
         # raw image
         tifffile.imwrite(path/"image.tif", self.image, bigtiff=True)
-        # spatial output
-        (path/"spatial").mkdir(parents=True, exist_ok=True)
-        self.locDF.to_csv(path/"spatial/tissue_positions.csv", index=False, header=False)
-        write_json(path/"spatial/scalefactors_json.json", self.scaleF)
+        # spatial image
         lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
         ii.imsave(path/"spatial/tissue_lowres_image.png", lowres_image)
         hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
         ii.imsave(path/"spatial/tissue_hires_image.png", hires_image)
+
+    @timer
+    def save(self, path:Path):
+        path.mkdir(parents=True, exist_ok=True)
+        (path/"spatial").mkdir(parents=True, exist_ok=True)
+        self._save_images(path)
+        self._save_feature_bc_matrix(path)
+        self._save_scalefactors(path)
+        self._save_location(path)
 
     def match2profile(self, profile:Profile):
         self.profile = profile
@@ -95,7 +107,7 @@ class rawData:
             temp = self.locDF.set_index(["array_row", "array_col"])
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)
-            self.locDF = self.locDF[profile.RawColumes]
+            self.locDF = self.locDF[profile.RawColumns]
         
         # map to image
         PointsOnFrame = self.profile.tissue_positions[["frame_row","frame_col"]].values
@@ -168,9 +180,10 @@ class VisiumData(rawData):
             var=self.adata.var
         )
 
-        cols = [col for col in HDprofile.RawColumes if col != "in_tissue"]
+        cols = [col for col in HDprofile.RawColumns if col != "in_tissue"]
         tissue_positions = HDprofile.tissue_positions[cols].copy()
         tissue_positions["in_tissue"] = np.repeat(0,len(tissue_positions))
+        tissue_positions = tissue_positions[HDprofile.RawColumns]
         superHD_demo = VisiumHDData(
                 tissue_positions = tissue_positions,
                 feature_bc_matrix = adata,
@@ -190,6 +203,10 @@ class VisiumHDData(rawData):
         file = self.path/"spatial/tissue_positions.parquet"
         self.locDF = pd.read_parquet(file)
         return self.locDF
+    
+    def _save_location(self,path):
+        file = path/"spatial/tissue_positions.parquet"
+        self.locDF.to_parquet(file, index=False)
 
     def load(self, path:Path, profile=VisiumHDProfile(), source_image_path:Path=None):
         super().load(path, source_image_path)
@@ -267,7 +284,7 @@ class VisiumHDData(rawData):
         tissue_positions["pxl_row_in_fullres"] = np.round(profile.tissue_positions["pxl_row_in_fullres"].values).astype(int)
         tissue_positions["pxl_col_in_fullres"] = np.round(profile.tissue_positions["pxl_col_in_fullres"].values).astype(int)
         tissue_positions["in_tissue"] = spot_in_tissue
-        tissue_positions = tissue_positions[profile.RawColumes]
+        tissue_positions = tissue_positions[profile.RawColumns]
         
         X_sparse = csr_matrix((X_data, X_indices, X_indptr), shape=(np.sum(spot_in_tissue), len(self.adata.var)))
         mask_in_tissue = spot_in_tissue == 1
@@ -394,9 +411,19 @@ class SRtools(VisiumData):
             raise ValueError()
         else:
             self.HDData = superHD_demo
-        superHD_demo.adata
-        superHD_demo.locDF
+        
+        merged = self.HDData.locDF.merge(self.SRresult, left_on=['array_row', 'array_col'], right_on=['x', 'y'])
+        # 将匹配的行的 in_tissue 列设置为 1
+        self.HDData.locDF.loc[self.HDData.locDF.index.isin(merged.index), 'in_tissue'] = 1
 
+        genes = self.SRresult.columns[2:]
+        # 合并后保留A表的列，选择合并后的列
+        self.SRresult = merged.set_index('barcode')[genes]
+
+        self.HDData.adata = AnnData(
+            X=csr_matrix(self.SRresult.to_numpy()),
+            obs=pd.DataFrame(index=self.SRresult.index),
+            var=self.HDData.adata.var.loc[genes,:])
         self.HDData.save(HDprefix)
 
     @timer
