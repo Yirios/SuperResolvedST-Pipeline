@@ -91,7 +91,7 @@ class rawData:
         order = self.profile.tissue_positions[["array_row", "array_col"]].values.tolist()
         raw_order = self.locDF[["array_row", "array_col"]].values.tolist()
         if not np.array_equal(order, raw_order):
-            print("test")
+            print("Unable to match the profile, transferring to the specified profile.")
             temp = self.locDF.set_index(["array_row", "array_col"])
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)

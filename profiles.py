@@ -307,7 +307,7 @@ def align_profile(HDprofile:VisiumHDProfile, profile:VisiumProfile, mode="center
                         uncovered[id] += 1
                     else:
                         spot_label_image[i,j] = id + 1
-                        spot_label[i*profile.row_range+j] = id
+                        spot_label[i*HDprofile.col_range+j] = id
                         covered[id] += 1
             if not quiet and uncovered[id]:
                 covered_rate = 100 * covered[id] / (uncovered[id]+covered[id])
