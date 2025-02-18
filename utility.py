@@ -1,5 +1,5 @@
 
-import time
+import time, sys
 from functools import wraps
 from pathlib import Path
 from hashlib import md5
@@ -31,6 +31,18 @@ def timer(func):
         print(f"Finish {func.__name__} in {elapsed_time:.4f} s")
         return result
     return wrapper
+
+def progress_bar(title, iterable, total):
+    sys.stdout.write(title + '\n')
+    def iter_with_bar(): 
+        for i, item in enumerate(iterable, 1):
+            percent = (i / total) * 100
+            bar = '█' * (i * 50 // total)  # 创建进度条
+            spaces = ' ' * (50 - len(bar))
+            sys.stdout.write(f"\r[{bar}{spaces}] {percent:.2f}%")
+            sys.stdout.flush()
+            yield item
+    return iter_with_bar
 
 def fast_to_csv(df: pd.DataFrame, file: Path, sep="\t"):
     with open(file, "w") as f:

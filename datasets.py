@@ -161,8 +161,8 @@ class VisiumData(rawData):
         self._bin2image(HDprofile, frame_center)
 
         # Get demo VisiumHD: without feature_bc_matrix
-        metadata = self.profile.metadata.copy()
-        metadata["chemistry_description"] = self.metadata["chemistry_description"]
+        metadata = HDprofile.metadata.copy()
+        metadata["library_ids"] = self.metadata["library_ids"]
         
         FullImage = np.max(self.image.shape)
         scaleF = {
@@ -258,7 +258,13 @@ class VisiumHDData(rawData):
         spot_in_tissue = np.zeros(len(profile), dtype=int)
         
         mask_in_tissue = self.locDF["in_tissue"] == 1
-        for id in range(len(profile)):
+
+        spot_iter = progress_bar(
+            title="Merge the gene expression from bins to the spot",
+            iterable=range(len(profile)),
+            total=len(profile)
+        )
+        for id in spot_iter():
             bin_out = profile.tissue_positions.loc[id,"num_bin_out_spot"]
             bin_in = profile.tissue_positions.loc[id,"num_bin_in_spot"]
             if bin_out and bin_out/(bin_in+bin_out) > uncover_thresholds:
@@ -278,7 +284,6 @@ class VisiumHDData(rawData):
             else:
                 spot_in_tissue[id] = 0
             
-            if id%100==0: print(id)
         
         tissue_positions = profile.tissue_positions[["barcode","array_row","array_col"]].copy()
         tissue_positions["pxl_row_in_fullres"] = np.round(profile.tissue_positions["pxl_row_in_fullres"].values).astype(int)
@@ -294,8 +299,8 @@ class VisiumHDData(rawData):
             obs=pd.DataFrame(index=tissue_positions.loc[mask_in_tissue,"barcode"].values)
         )
 
-        metadata = self.profile.metadata.copy()
-        metadata["chemistry_description"] = self.metadata["chemistry_description"]
+        metadata = profile.metadata.copy()
+        metadata["library_ids"] = self.metadata["library_ids"]
 
         FullImage = np.max(self.image.shape)
         scaleF = {

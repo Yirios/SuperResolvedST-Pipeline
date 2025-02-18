@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import warnings
 
-from utility import hash_to_dna
+from utility import hash_to_dna, progress_bar
 
 
 class Profile:
@@ -26,6 +26,7 @@ class Profile:
 class VisiumProfile(Profile):
     SERIAL_SMALL = (1,4)
     SERIAL_LARGE = (5)
+    SERIAL_CytAssist = (4,5)
     def __init__(self, slide_serial=1):
         '''\
         https://www.10xgenomics.com/support/software/space-ranger/latest/analysis/inputs/image-slide-parameters
@@ -53,13 +54,6 @@ class VisiumProfile(Profile):
 
     @property
     def frame(self):
-        """\
-        Compute the overall frame dimensions of the Visium capture area.
-        
-        Returns
-        -------
-        tuple of (width:float, height:float)
-        """
         w = self.spot_step * (self.col_range-0.5) + self.spot_diameter
         h = self.spot_step * (self.row_range-1) * math.sqrt(3)/2 + self.spot_diameter
         return w, h
@@ -106,21 +100,10 @@ class VisiumProfile(Profile):
         self.tissue_positions =  self.__get_dataframe()
     
     def id2array(self, id:int):
-        """\
-        Convert a linear identifier into Visium coordinates.
-
-        Parameters
-        ----------
-        The spot id : int
-
-        Returns
-        -------
-        tuple of (array_row:int, array_col:int)
-        """
-        if self.serial == 4:
+        if self.serial in VisiumProfile.SERIAL_CytAssist:
             array_row = id//self.col_range
             array_col = 2 * (id%self.col_range) + array_row%2
-        else:
+        elif self.serial == 1:
             array_row2, array_col = id//(self.col_range*2), id%(self.col_range*2)
             array_row = 2*array_row2 + array_col%2
         return array_row, array_col
@@ -130,10 +113,12 @@ class VisiumProfile(Profile):
 
 class VisiumHDProfile(Profile):
     HiresImage = 6000
-    def __init__(self):
-        self.bin_size = 2.0
+    def __init__(self, bin_size=2):
+        self.bin_size = 2
         self.row_range = 3350
         self.col_range = 3350
+        if bin_size != 2: 
+            self.reset(bin_size)
         self.tissue_positions = self.__get_dataframe()
         self.metadata = {
             'chemistry_description': 'Visium HD v1',
@@ -144,13 +129,6 @@ class VisiumHDProfile(Profile):
     
     @property
     def frame(self):
-        """\
-        Compute the overall frame dimensions of the Visium HD capture area.
-
-        Returns
-        -------
-        tuple of (width:float, height:float)
-        """
         w = self.bin_size * self.row_range
         h = self.bin_size * self.col_range
         return w, h
@@ -184,17 +162,6 @@ class VisiumHDProfile(Profile):
             )
 
     def id2array(self, id:int):
-        """\
-        Convert a linear identifier into Visium HD coordinates.
-
-        Parameters
-        ----------
-        The spot id : int
-
-        Returns
-        -------
-        tuple of (array_row:int, array_col:int)
-        """
         array_row = id//self.row_range
         array_col = id%self.row_range
         return array_row, array_col
@@ -209,8 +176,8 @@ class VisiumHDProfile(Profile):
         ----------
         bin_size : float
         """
-        self.row_range = int(self.row_range*self.bin_size/bin_size)
-        self.col_range = int(self.col_range*self.bin_size/bin_size)
+        self.row_range = self.row_range*self.bin_size//bin_size
+        self.col_range = self.col_range*self.bin_size//bin_size
         self.bin_size = bin_size
         self.tissue_positions = self.__get_dataframe()
 
@@ -283,10 +250,6 @@ def align_profile(HDprofile:VisiumHDProfile, profile:VisiumProfile, mode="center
         frame_center = get_frame_center(HDprofile.frame, profile.frame, mode, kwargs)
         x0 = frame_center[0]-profile.frame[1]/2
         y0 = frame_center[1]-profile.frame[0]/2
-        spots = (
-            (id, x+x0, y+y0, r)
-            for id, _, (x, y, r) in profile.spots
-        )
 
         # Lambda to determine the range of bin indices to check for a given coordinate
         bin_iter = lambda a: range(int((a-r)/HDprofile.bin_size),int((a+r)/HDprofile.bin_size)+2)
@@ -298,6 +261,10 @@ def align_profile(HDprofile:VisiumHDProfile, profile:VisiumProfile, mode="center
         covered = np.zeros(len(profile), dtype=int)
         
         # Iterate over all spots in the profile
+        spots=(
+            (id, x+x0, y+y0, r)
+            for id, _, (x, y, r) in profile.spots
+        )
         for id, x, y, r in spots:
             # Iterate over bins near the spot center
             for i, j in product(bin_iter(x), bin_iter(y)):
