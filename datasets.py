@@ -392,13 +392,11 @@ class SRtools(VisiumData):
     def save_inpout(self, prefix:Path):
         prefix.mkdir(parents=True, exist_ok=True)
         self.prefix = prefix
-        print("Start convert")
         # write selected gene names
         with open(self.prefix/"gene-names.txt","w") as f:
             f.write("\n".join(self.adata.var.index.values))
         self.convert()
         self.save_params()
-        print("Finish convert")
     
     def load_output(self, prefix:Path=None):
         '''
@@ -597,9 +595,6 @@ class iStar(SRtools):
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
         mask = ii.imread(self.prefix/'mask.png')
-        # select genes
-        with open(self.prefix/'gene-names.txt', 'r') as file:
-            genes = [line.rstrip() for line in file]
 
         if mask.shape != self.super_image_shape:
             mask = image_resize(mask, shape=self.super_image_shape)
@@ -609,7 +604,16 @@ class iStar(SRtools):
         # select unmasked super pixel 
         Xs,Ys = np.where(mask)
         data = {"x":Xs, "y":Ys}
-        for gene in genes:
+
+        # select genes
+        with open(self.prefix/'gene-names.txt', 'r') as file:
+            genes = [line.rstrip() for line in file]
+        gene_iter = progress_bar(
+            title="Reading iStar output",
+            iterable=genes,
+            total=len(genes)
+        )
+        for gene in gene_iter():
             with open(self.prefix/f'cnts-super/{gene}.pickle', 'rb') as file:
                 cnts = pickle.load(file)
             data[gene]=[x for x in np.round(cnts[Xs, Ys], decimals=8)]

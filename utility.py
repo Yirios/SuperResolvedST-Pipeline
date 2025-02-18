@@ -37,11 +37,12 @@ def progress_bar(title, iterable, total):
     def iter_with_bar(): 
         for i, item in enumerate(iterable, 1):
             percent = (i / total) * 100
-            bar = '█' * (i * 50 // total)  # 创建进度条
+            bar = '█' * (i * 50 // total)
             spaces = ' ' * (50 - len(bar))
             sys.stdout.write(f"\r[{bar}{spaces}] {percent:.2f}%")
             sys.stdout.flush()
             yield item
+        sys.stdout.write('\n')
     return iter_with_bar
 
 def fast_to_csv(df: pd.DataFrame, file: Path, sep="\t"):
