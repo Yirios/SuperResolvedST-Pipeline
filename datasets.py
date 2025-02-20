@@ -5,6 +5,7 @@ from typing import List, Dict, Tuple
 from itertools import product
 from datetime import datetime
 import shutil
+import copy
 
 import numpy as np
 import cv2
@@ -90,6 +91,7 @@ class rawData:
 
     @timer
     def save(self, path:Path):
+        path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         (path/"spatial").mkdir(parents=True, exist_ok=True)
         self._save_images(path)
@@ -136,9 +138,12 @@ class VisiumData(rawData):
         self.match2profile(profile)
         self.profile:VisiumProfile
 
-    def vision_spots(self):
+    def vision_spots(self, in_tissue=False):
         image = self.image.copy()
-        spots = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        if not in_tissue:
+            spots = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        else:
+            spots = self.locDF.loc[self.locDF['in_tissue']==1, ["pxl_col_in_fullres","pxl_row_in_fullres"]].values
         for pt in spots:
             cv2.circle(image, tuple(pt), 50, (255,0,0), -1)
         return image
@@ -155,12 +160,22 @@ class VisiumData(rawData):
 
         return binsOnImage
     
-    def drop_spots(self, spot_ids:List):
-        drop_mask = self.profile.tissue_positions["id"] in spot_ids
+    def drop_spots(self, spot_ids:List, in_place=False) :
+        if not in_place:
+            dropped = copy.deepcopy(self)
+            dropped.drop_spots(spot_ids,in_place=True)
+            return dropped
+        drop_mask = self.profile.tissue_positions["id"].isin(spot_ids)
         tissue_mask = self.locDF["in_tissue"].values == 1
-        drop_mask = drop_mask and tissue_mask
+        drop_mask = drop_mask & tissue_mask
+        sys.stdout.write(f"{sum(drop_mask)} spots will be dropped.\n")
 
-        pass
+        self.locDF.loc[drop_mask,"in_tissue"] = 0
+        undrop_mask = tissue_mask & ~drop_mask
+        undrop_barcode = self.locDF.loc[undrop_mask,"barcode"]
+        self.adata = self.adata[undrop_barcode,:]
+
+
 
     def Visium2HD(self, HDprofile:VisiumHDProfile, **kwargs) -> "VisiumHDData":
 
@@ -396,6 +411,7 @@ class SRtools(VisiumData):
         self.capture_area = parameters["capture_area"]
 
     def save_input(self, prefix:Path):
+        prefix = Path(prefix)
         prefix.mkdir(parents=True, exist_ok=True)
         self.prefix = prefix
         # write selected gene names
@@ -411,7 +427,7 @@ class SRtools(VisiumData):
         if not (self.prefix or prefix):
             raise ValueError("Run save_inpout frist or set prefix")
         else: 
-            self.prefix = prefix
+            self.prefix = Path(prefix)
         self.load_params()
     
     @timer
