@@ -154,6 +154,13 @@ class VisiumData(rawData):
         profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = binsOnImage
 
         return binsOnImage
+    
+    def drop_spots(self, spot_ids:List):
+        drop_mask = self.profile.tissue_positions["id"] in spot_ids
+        tissue_mask = self.locDF["in_tissue"].values == 1
+        drop_mask = drop_mask and tissue_mask
+
+        pass
 
     def Visium2HD(self, HDprofile:VisiumHDProfile, **kwargs) -> "VisiumHDData":
 
@@ -283,7 +290,6 @@ class VisiumHDData(rawData):
                 spot_in_tissue[id] = 1
             else:
                 spot_in_tissue[id] = 0
-            
         
         tissue_positions = profile.tissue_positions[["barcode","array_row","array_col"]].copy()
         tissue_positions["pxl_row_in_fullres"] = np.round(profile.tissue_positions["pxl_row_in_fullres"].values).astype(int)
@@ -377,7 +383,7 @@ class SRtools(VisiumData):
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "project_dir": str(self.prefix.resolve())
         }
-        if self.capture_area:
+        if None not in self.capture_area:
             parameters["capture_area"] = self.capture_area
         else:
             parameters["capture_area"] = [0,0,*self.super_image_shape]
@@ -389,7 +395,7 @@ class SRtools(VisiumData):
         self.super_image_shape = parameters["super_image_shape"]
         self.capture_area = parameters["capture_area"]
 
-    def save_inpout(self, prefix:Path):
+    def save_input(self, prefix:Path):
         prefix.mkdir(parents=True, exist_ok=True)
         self.prefix = prefix
         # write selected gene names
@@ -411,16 +417,14 @@ class SRtools(VisiumData):
     @timer
     def to_VisiumHD(self, HDprefix:Path, superHD_demo:VisiumHDData=None):
         if not (self.HDData or superHD_demo ):
-            raise ValueError()
-        else:
+            raise ValueError("Run set_target_VisiumHD frist or set superHD_demo")
+        elif superHD_demo:
             self.HDData = superHD_demo
         
         merged = self.HDData.locDF.merge(self.SRresult, left_on=['array_row', 'array_col'], right_on=['x', 'y'])
-        # 将匹配的行的 in_tissue 列设置为 1
         self.HDData.locDF.loc[self.HDData.locDF.index.isin(merged.index), 'in_tissue'] = 1
 
         genes = self.SRresult.columns[2:]
-        # 合并后保留A表的列，选择合并后的列
         self.SRresult = merged.set_index('barcode')[genes]
 
         self.HDData.adata = AnnData(
@@ -498,14 +502,7 @@ class iStar(SRtools):
         return img, scalef
 
     def transfer_mask_base(self, img:np.ndarray):
-        scalef = 16*self.pixel_size/self.super_pixel_size
-        img = image_resize(img, scalef=scalef)
-        H256 = (img.shape[0] + 255) // 256 * 256
-        W256 = (img.shape[1] + 255) // 256 * 256
-        img, _ = image_pad(img, (H256,W256))
-        H16 = H256//16
-        W16 = W256//16
-        img = image_resize(img, shape=(W16,H16))
+        img, _ = self.transfer_image_base(img)
         _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
         return img
     
@@ -560,7 +557,7 @@ class iStar(SRtools):
             image, scaleF = self.transfer_image_base(self.image)
             mask = self.transfer_mask_base(self.mask)
             locDF = self.transfer_loc_base(scaleF)
-            self.super_image_shape = mask.shape
+            self.super_image_shape = [i//16 for i in mask.shape]
         else:
             image, scaleF, scaleFyx, crop_mapper, capture_area = self.transfer_image_HD(self.image)
             mask = self.transfer_mask_HD(self.mask)

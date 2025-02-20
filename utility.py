@@ -389,10 +389,6 @@ class PerspectiveTransformer:
         # 交换回来得到 (x, y)
         return mapped_points[:, :2][:, ::-1]
 
-
-import cv2
-import numpy as np
-
 def draw_points(image: np.ndarray, points: np.ndarray, radius: int = 3, color: tuple = (0, 255, 0), thickness: int = -1) -> np.ndarray:
     """
     在图像上批量绘制点
