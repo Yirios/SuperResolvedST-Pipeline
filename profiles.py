@@ -12,7 +12,7 @@ from utility import hash_to_dna, progress_bar
 
 class Profile:
     LowresImage = 600
-    HiresImage = [2000,None,None,2000,4000]
+    HiresImage = [None,2000,None,None,2000,4000]
     RawColumns = ["barcode","in_tissue","array_row","array_col","pxl_row_in_fullres","pxl_col_in_fullres"]
     def __init__(self, tissue_positions:pd.DataFrame, frame:Tuple[float,float]):
         '''\

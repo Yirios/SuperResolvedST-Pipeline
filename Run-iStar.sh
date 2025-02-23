@@ -2,7 +2,7 @@
 set -e
 
 prefix=$1  # e.g. data/demo/
-num_jobs=1
+num_jobs=2
 num_states=5
 device="cuda"  # "cuda" or "cpu"
 

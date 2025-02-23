@@ -56,6 +56,10 @@ class rawData:
 
     def read_image(self, file:Path):
         self.image = tifffile.imread(file)
+        if len(self.image.shape) == 2:
+            self.image_channels = 1
+        else:
+            self.image_channels = self.image.shape[2]
     
     @timer
     def load(self, path:Path, source_image_path:Path=None):
@@ -106,11 +110,12 @@ class rawData:
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)
             self.locDF = self.locDF[profile.RawColumns]
-        
         # map to image
         PointsOnFrame = self.profile.tissue_positions[["frame_row","frame_col"]].values
         PointsOnImage = self.locDF[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
         self.mapper = AffineTransform(PointsOnFrame, PointsOnImage)
+        # add in location 
+        self.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = PointsOnImage
         self.pixel_size = self.mapper.resolution
 
     def select_HVG(self,n_top_genes=2000, min_counts=10) -> None:
@@ -171,8 +176,6 @@ class VisiumData(rawData):
         undrop_barcode = self.locDF.loc[undrop_mask,"barcode"]
         self.adata = self.adata[undrop_barcode,:]
 
-
-
     def Visium2HD(self, HDprofile:VisiumHDProfile, **kwargs) -> "VisiumHDData":
 
         _, frame_center =  align_profile(HDprofile, self.profile, **kwargs)
@@ -209,6 +212,7 @@ class VisiumData(rawData):
                 metadata = metadata
             )
         superHD_demo.image = self.image
+        superHD_demo.image_channels = self.image_channels
         superHD_demo.pixel_size = self.pixel_size
         superHD_demo.bin_size = HDprofile.bin_size
         superHD_demo.match2profile(HDprofile)
@@ -226,17 +230,15 @@ class VisiumHDData(rawData):
         file = path/"spatial/tissue_positions.parquet"
         self.locDF.to_parquet(file, index=False)
 
-    def load(self, path:Path, profile=VisiumHDProfile(), source_image_path:Path=None):
+    def load(self, path:Path, profile:VisiumHDProfile, source_image_path:Path=None):
         super().load(path, source_image_path)
         
         self.bin_size = self.scaleF["bin_size_um"]
         self.pixel_size = self.scaleF["microns_per_pixel"]
-        if self.bin_size != 2.0:
-            warnings.warn(f"Using data in bin size of {self.bin_size}, recommed 2 um.")
-            profile.reset(self.bin_size)
-        
+        if profile.bin_size != self.bin_size:
+            warnings.warn(f"bin size of VisiumHD is {self.bin_size}, but profile recommend {profile.bin_size}, Start Rebinnig")
+            self.rebining()
         self.match2profile(profile)
-        self.profile:VisiumHDProfile
 
     def rebining(self, profile:VisiumHDProfile) -> "VisiumHDData":
         '''\
@@ -244,13 +246,37 @@ class VisiumHDData(rawData):
         '''
         pass
 
+    def crop_patch(self, patch_size=None, patch_shape=None):
+        if not patch_size:
+            patch_size = self.bin_size
+        if not patch_shape:
+            patch_pixel = int(patch_size/self.pixel_size+0.5)
+            patch_shape = (patch_pixel, patch_pixel)
+        
+        bins = progress_bar(
+            title="Cropping patch image of each bin",
+            iterable=self.profile.bins,
+            total=len(self.profile)
+        )
+        
+        bin_patch_shape = [
+            self.profile.row_range,
+            self.profile.col_range,
+            *patch_shape
+            ]
+        if self.image_channels > 1:
+            bin_patch_shape.append(self.image_channels)
+        
+        patch_array = np.full(bin_patch_shape, fill_value=255, dtype=np.uint8)
+        for id,(i,j),(x,y,_) in bins():
+            corners = get_corner(x,y,*patch_shape)
+            cornerOnImage = self.mapper.transform_batch(np.array(corners))
+            patchOnImage = crop_single_patch(self.image, cornerOnImage)
+            patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
 
-    def get_HDlikeImage(self, profile:Profile, img, bias) -> PerspectiveTransformer:
-        cornerOnfarme = profile.tissue_positions[["frame_row","frame_col"]] - np.array([bias])
-        cornerOnImage = self.mapper.transform_batch(cornerOnfarme)
-        image_transformer = PerspectiveTransformer(img, corners=cornerOnImage)
-        return image_transformer
-    
+        return patch_array
+
+
     def _spot2image(self, profile:VisiumProfile, frame_center:Tuple[float, float]):
         '''\
         add pxl_row_in_fullres, pxl_col_in_fullres in profile.tissue_positions
@@ -266,9 +292,13 @@ class VisiumHDData(rawData):
         return spotsOnImage
     
     def HD2Visium(self, profile:VisiumProfile, uncover_thresholds=0, **kwargs) -> VisiumData:
-
-        _, frame_center =  align_profile(self.profile, profile, **kwargs)
-        self._spot2image(profile, frame_center)
+        readyHD = {'spot_label', "pxl_row_in_fullres", "pxl_col_in_fullres"}  <= \
+            set(self.profile.tissue_positions.columns)
+        readyVisium = {"num_bin_out_spot","num_bin_in_spot"}  <= \
+            set(profile.tissue_positions.columns)
+        if not (readyHD and readyVisium):
+            _, frame_center =  align_profile(self.profile, profile, **kwargs)
+            self._spot2image(profile, frame_center)
         
         X_indptr = [0]
         X_indices = np.zeros(0)

@@ -34,14 +34,16 @@ def timer(func):
 
 def progress_bar(title, iterable, total):
     sys.stdout.write(title + '\n')
+    step = total // 1000
     def iter_with_bar(): 
         for i, item in enumerate(iterable, 1):
-            percent = (i / total) * 100
-            bar = '█' * (i * 50 // total)
-            spaces = ' ' * (50 - len(bar))
-            sys.stdout.write(f"\r[{bar}{spaces}] {percent:.2f}%")
-            sys.stdout.flush()
             yield item
+            if i % step == 0:
+                percent = (i / total) * 100
+                bar = '█' * (i * 50 // total)
+                spaces = ' ' * (50 - len(bar))
+                sys.stdout.write(f"\r[{bar}{spaces}] {percent:.1f}%")
+                sys.stdout.flush()
         sys.stdout.write('\n')
     return iter_with_bar
 
@@ -243,152 +245,6 @@ def mask_outside_rectangle(image, rect) -> np.ndarray:
     result = cv2.bitwise_and(image, mask)
     return result
 
-class PerspectiveTransformer:
-    def __init__(self, image: np.ndarray, corners: np.ndarray):
-        """
-        初始化透视变换类
-
-        :param image: 原始图像 (numpy 数组)
-        :param corners: 四个顶点坐标，形状为 (4, 2)，顺序为左上、右上、右下、左下
-        """
-        self.image = image
-        self.corners = corners.astype("float32")
-        self.warped_image = None
-        self.M = None       # 正向透视变换矩阵（原图 -> warped）
-        self.M_inv = None   # 逆透视变换矩阵（warped -> 原图）
-        if len(self.image.shape) == 2:
-            self.channels = 1
-        else:
-            self.channels = self.image.shape[2]
-
-    def crop_image(self):
-        """
-        利用给定的四个顶点裁剪并校正图像，同时计算正向和逆向透视变换矩阵，
-        并使用 NumPy 实现透视变换，适合处理大图像。
-
-        :return: 裁剪后的图像和正向透视变换矩阵 M
-        """
-        # 计算目标矩形的宽度：取左下到右下和左上到右上的距离的最大值
-        widthA = np.linalg.norm(self.corners[2] - self.corners[3])
-        widthB = np.linalg.norm(self.corners[1] - self.corners[0])
-        maxWidth = int(max(widthA, widthB))
-
-        # 计算目标矩形的高度：取右上到右下和左上到左下的距离的最大值
-        heightA = np.linalg.norm(self.corners[1] - self.corners[2])
-        heightB = np.linalg.norm(self.corners[0] - self.corners[3])
-        maxHeight = int(max(heightA, heightB))
-
-        # 定义目标矩形的四个顶点（顺序：左上、右上、右下、左下）
-        target_corner = np.array([
-            [0, 0],                         # 左上
-            [0, maxWidth - 1,],              # 右上
-            [maxHeight - 1, maxWidth - 1],    # 右下
-            [maxHeight - 1, 0]              # 左下
-        ], dtype="float32")
-
-        # 计算正向透视变换矩阵 M
-        self.M = cv2.getPerspectiveTransform(self.corners[:,::-1], target_corner[:,::-1],)
-        # 计算逆透视变换矩阵，用于将 warped 图像中的点映射回原图
-        self.M_inv = np.linalg.inv(self.M)
-
-        # 利用 NumPy 实现透视变换
-        self.warped_image = self.warp_image_numpy(maxWidth, maxHeight)
-        return self.warped_image, self.M
-
-    def warp_image_numpy(self, maxWidth: int, maxHeight: int):
-        """
-        使用 NumPy 实现透视变换。
-        为目标图像的每个像素计算其在源图像中的位置（使用 M_inv），
-        然后采用最近邻插值进行采样，不在源图范围内的像素填充为边界颜色。
-
-        :param maxWidth: 输出图像宽度
-        :param maxHeight: 输出图像高度
-        :return: 裁剪并校正后的图像
-        """
-        # 创建目标图像的网格坐标（注意顺序：x 对应列，y 对应行）
-        xv, yv = np.meshgrid(np.arange(maxWidth), np.arange(maxHeight))
-        ones = np.ones_like(xv)
-        # 构造齐次坐标矩阵，形状为 (3, N)，其中 N = maxWidth*maxHeight
-        dest_coords = np.stack([xv, yv, ones], axis=0).reshape(3, -1)
-
-        # 利用逆矩阵将目标坐标映射回原图中的坐标（齐次坐标）
-        src_coords_hom = self.M_inv.dot(dest_coords)
-        src_coords_hom /= src_coords_hom[2:3, :]  # 归一化
-
-        # 提取原图中的 x 和 y 坐标
-        src_x = src_coords_hom[0, :]
-        src_y = src_coords_hom[1, :]
-
-        # 采用最近邻插值
-        src_x_round = np.round(src_x).astype(np.int64)
-        src_y_round = np.round(src_y).astype(np.int64)
-
-        H_src, W_src = self.image.shape[:2]
-
-        # 根据图像通道数确定边界填充值：单通道为 0，彩色图像填充白色
-        if self.channels == 1:
-            borderValue = 0
-            warped = np.full((maxHeight, maxWidth), borderValue, dtype=self.image.dtype)
-        else:
-            borderValue = tuple([255] * self.channels)
-            warped = np.full((maxHeight, maxWidth, self.channels), borderValue, dtype=self.image.dtype)
-
-        # 检查源坐标是否在有效范围内
-        valid = (src_x_round >= 0) & (src_x_round < W_src) & \
-                (src_y_round >= 0) & (src_y_round < H_src)
-        valid = valid.reshape(-1)
-
-        # 获取有效位置在目标图像中的行列索引
-        dest_indices = np.nonzero(valid)[0]
-        dest_x_flat = xv.flatten()[dest_indices]
-        dest_y_flat = yv.flatten()[dest_indices]
-
-        # 获取对应有效位置在源图像中的坐标
-        valid_src_x = src_x_round.reshape(-1)[dest_indices]
-        valid_src_y = src_y_round.reshape(-1)[dest_indices]
-
-        # 将源图像像素值复制到目标图像
-        if self.channels == 1:
-            warped[dest_y_flat, dest_x_flat] = self.image[valid_src_y, valid_src_x]
-        else:
-            warped[dest_y_flat, dest_x_flat, :] = self.image[valid_src_y, valid_src_x, :]
-
-        return warped
-
-    def reverse_map_points(self, points: np.ndarray) -> np.ndarray:
-        """
-        批量将 warped 图像中的点反向映射回原图像
-
-        :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
-        :return: 映射回原图像后的点，形状为 (N, 2)
-        """
-        if self.M_inv is None:
-            raise ValueError("请先调用 crop_image 方法计算透视变换矩阵。")
-        ones = np.ones((points.shape[0], 1))
-        homogeneous_points = np.hstack([points, ones])
-        mapped_points = homogeneous_points.dot(self.M_inv.T)
-        mapped_points /= mapped_points[:, 2][:, np.newaxis]
-        return mapped_points[:, :2]
-
-    def map_points(self, points: np.ndarray) -> np.ndarray:
-        """
-        将原图中的多个点映射到透视变换后的图像中
-
-        :param points: numpy 数组，形状为 (N, 2)，每行表示一个点 (x, y)
-        :return: 映射后的点，形状为 (N, 2)
-        """
-        # 交换 (x, y) 到 (y, x)
-        swapped_points = points[:, ::-1].astype(np.float32)
-        ones = np.ones((swapped_points.shape[0], 1), dtype=np.float32)
-        homogeneous_points = np.hstack([swapped_points, ones])  # 形状 (N, 3)
-        
-        # 计算透视变换后的坐标
-        mapped_points = homogeneous_points.dot(self.M.T)
-        # 避免数值不稳定，直接用浮点数除法归一化
-        mapped_points /= mapped_points[:, 2:3]
-        # 交换回来得到 (x, y)
-        return mapped_points[:, :2][:, ::-1]
-
 def draw_points(image: np.ndarray, points: np.ndarray, radius: int = 3, color: tuple = (0, 255, 0), thickness: int = -1) -> np.ndarray:
     """
     在图像上批量绘制点
@@ -404,3 +260,87 @@ def draw_points(image: np.ndarray, points: np.ndarray, radius: int = 3, color: t
     for pt in points:
         cv2.circle(image, tuple(pt), radius, color, thickness)
     return image
+
+
+def get_corner(x,y,h,w):
+    a = h/2; b = w/2
+    return [[x-a,y-b],[x-a,y+b],[x+a,y+b],[x+a,y-b]]
+    
+def crop_single_patch(image:np.ndarray, corners):
+    H, W = image.shape[:2]
+    if len(image.shape) == 2:
+        image_channels = 1
+    else:
+        image_channels = image.shape[2]
+
+    x_min = int(np.floor(min(corners[:, 0])))
+    x_max = int(np.ceil(max(corners[:, 0])))
+    y_min = int(np.floor(min(corners[:, 1])))
+    y_max = int(np.ceil(max(corners[:, 1])))
+
+    pad_left = max(0, -y_min)
+    pad_right = max(0, y_max - W)
+    pad_top = max(0, -x_min)
+    pad_bottom = max(0, x_max - H)
+
+    x_min, x_max = max(0, x_min), min(H, x_max)
+    y_min, y_max = max(0, y_min), min(W, y_max)
+
+    patch = image[x_min:x_max, y_min:y_max]
+
+    white_value = 255 if image_channels == 1 else [255] * image_channels
+    patch_filled = np.full(
+        (x_max - x_min + pad_top + pad_bottom, y_max - y_min + pad_left + pad_right, image_channels),
+        white_value, dtype=image.dtype
+    )
+
+    patch_filled[pad_top:pad_top + patch.shape[0], pad_left:pad_left + patch.shape[1]] = patch
+
+    return patch_filled
+
+def get_outside_indices(shape, dx, dy, num_row, num_col):
+    rows, cols = shape
+    row_grid, col_grid = np.ogrid[0:rows, 0:cols]
+    
+    inside_row = (row_grid >= dx) & (row_grid < dx + num_row)
+    inside_col = (col_grid >= dy) & (col_grid < dy + num_col)
+    inside_mask = inside_row & inside_col
+    
+    outside_mask = ~inside_mask
+    outside_rows, outside_cols = np.where(outside_mask)
+    return list(zip(outside_rows, outside_cols))
+    
+def reconstruct_image(patch_array):
+    # 获取 patch_array 的维度信息
+    if patch_array.ndim == 4:
+        # 单通道，形状为 (rows, cols, ph, pw)
+        rows, cols, ph, pw = patch_array.shape
+        channels = 1
+    elif patch_array.ndim == 5:
+        # 多通道，形状为 (rows, cols, ph, pw, channels)
+        rows, cols, ph, pw, channels = patch_array.shape
+    else:
+        raise ValueError("Unexpected patch_array shape")
+    
+    # 创建空白的大图
+    if channels > 1:
+        reconstructed = np.zeros((rows * ph, cols * pw, channels), dtype=patch_array.dtype)
+    else:
+        reconstructed = np.zeros((rows * ph, cols * pw), dtype=patch_array.dtype)
+    
+    # 遍历每个 patch 并填充到大图中
+    for i in range(rows):
+        for j in range(cols):
+            if channels > 1:
+                patch = patch_array[i, j]
+            else:
+                patch = patch_array[i, j]
+            # 计算当前位置在大图中的坐标
+            x_start = i * ph
+            x_end = x_start + ph
+            y_start = j * pw
+            y_end = y_start + pw
+            # 将 patch 放入对应位置
+            reconstructed[x_start:x_end, y_start:y_end] = patch
+    
+    return reconstructed.squeeze()  # 去除单通道情况下的多余维度

@@ -195,51 +195,58 @@ class iStar(SRtools):
         img, _ = self.transfer_image_base(img)
         _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
         return img
-    
-    def transfer_image_HD(self, img:np.ndarray):
+
+    def transfer_image_HD(self):
+        patch_shape=(16,16)
         num_row = self.HDData.profile.row_range
         num_col = self.HDData.profile.col_range
         H16 = (num_row + 15) // 16 * 16
         W16 = (num_col + 15) // 16 * 16
         HDdx = (H16-num_row)//2
         HDdy = (W16-num_col)//2
-        Hframe = H16*self.HDData.bin_size; Wframe = W16*self.HDData.bin_size
-        corner = pd.DataFrame(
-            {
-                "id":[0,1,2,3],
-                "array_row":[0,0,1,1],
-                "array_col":[0,1,1,0],
-                "frame_row":[0,0,Hframe,Hframe],
-                "frame_col":[0,Wframe,Wframe,0]
-            }
-        )
-
-        image_profile = Profile(corner,(Wframe, Hframe))
-        transformer = self.HDData.get_HDlikeImage(image_profile, img,(HDdx*self.HDData.bin_size, HDdy*self.HDData.bin_size))
-        HDlikeImage, _ = transformer.crop_image()
-        H256 = H16*16
-        W256 = W16*16
-        img = image_resize(HDlikeImage, shape=(W256,H256))
-        scalef, scalefyx = calculate_scale_factor(HDlikeImage, img)
+        bin_patch_shape = [
+            H16,W16,*patch_shape
+            ]
+        if self.HDData.image_channels > 1:
+            bin_patch_shape.append(self.HDData.image_channels)
+        
+        patch_array = np.full(bin_patch_shape, fill_value=255, dtype=np.uint8)
+        patch_array[HDdx:HDdx+num_row,HDdy:HDdy+num_col] = self.HDData.crop_patch(patch_shape=patch_shape)
+        for i,j in get_outside_indices((H16,W16), HDdx, HDdy, num_row, num_col):
+            x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
+            corners = get_corner(x,y,*patch_shape)
+            cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
+            patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
+            patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
+        img = reconstruct_image(patch_array)
+        binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
+        binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*16  \
+            + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
+        HDmapper = AffineTransform(binsOnImage, binsOnHD)
         capture_area = (HDdx*16, HDdy*16, num_row*16, num_col*16)
-        return img, scalef, scalefyx, transformer, capture_area
+        scaleF = HDmapper.resolution/self.HDData.pixel_size
+        return img, capture_area, HDmapper, scaleF
     
-    def transfer_mask_HD(self, img):
-        img, _, _, _, capture_area = self.transfer_image_HD(img)
-        _, img = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
-        img = mask_outside_rectangle(img, rect=capture_area)
-        return img
+    def transfer_image_mask_HD(self):
+        mask = 255 - self.mask
+        mask = mask.astype(np.uint8)[..., np.newaxis]
+        self.HDData.image_channels += 1
+        self.HDData.image = np.concatenate([self.HDData.image, mask], axis=2)
+        img, capture_area, HDmapper, scaleF = self.transfer_image_HD()
+        self.HDData.image_channels -= 1
+        mask = 255 - img[:,:,3]
+        img = img[:,:,:3]
+        self.HDData.image = self.HDData.image[:,:,:3]
+        return img, mask, capture_area, HDmapper, scaleF
 
-    def transfer_loc_HD(self, mapper:PerspectiveTransformer, scaleFyx) -> pd.DataFrame:
+    def transfer_loc_HD(self, mapper:AffineTransform) -> pd.DataFrame:
         df = self.locDF.copy(True)
         df.columns = ["barcode","in_tissue","array_row","array_col","y","x"]
         df = df[df["in_tissue"]==1]
         del df["in_tissue"]
         df["spot"] = df["array_row"].astype(str) + "x" + df["array_col"].astype(str)
         df = df.astype({"y": float, "x": float})
-        df.loc[:, ["y", "x"]] = mapper.map_points(df[["y", "x"]].values) 
-        df["x"] = np.round(df["x"] * scaleFyx[0]).astype(int)
-        df["y"] = np.round(df["x"] * scaleFyx[0]).astype(int)
+        df.loc[:, ["y", "x"]] = mapper.transform_batch(df[["y", "x"]].values) 
         return df
 
     def convert(self):
@@ -249,9 +256,8 @@ class iStar(SRtools):
             locDF = self.transfer_loc_base(scaleF)
             self.super_image_shape = [i//16 for i in mask.shape]
         else:
-            image, scaleF, scaleFyx, crop_mapper, capture_area = self.transfer_image_HD(self.image)
-            mask = self.transfer_mask_HD(self.mask)
-            locDF = self.transfer_loc_HD(crop_mapper, scaleFyx)
+            image, mask, capture_area, HDmapper, scaleF = self.transfer_image_mask_HD()
+            locDF = self.transfer_loc_HD(HDmapper)
             self.super_image_shape = [i//16 for i in mask.shape]
             self.capture_area = [i//16 for i in capture_area]
             
