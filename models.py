@@ -14,7 +14,7 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
 from utility import *
-from profiles import Profile
+from profiles import VisiumProfile
 from datasets import VisiumData, VisiumHDData
 
 class SRtools(VisiumData):
@@ -223,7 +223,7 @@ class iStar(SRtools):
         binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*16  \
             + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
         HDmapper = AffineTransform(binsOnImage, binsOnHD)
-        capture_area = (HDdx*16, HDdy*16, num_row*16, num_col*16)
+        capture_area = (HDdx, HDdy, num_row, num_col)
         scaleF = HDmapper.resolution/self.HDData.pixel_size
         return img, capture_area, HDmapper, scaleF
     
@@ -259,7 +259,7 @@ class iStar(SRtools):
             image, mask, capture_area, HDmapper, scaleF = self.transfer_image_mask_HD()
             locDF = self.transfer_loc_HD(HDmapper)
             self.super_image_shape = [i//16 for i in mask.shape]
-            self.capture_area = [i//16 for i in capture_area]
+            self.capture_area = capture_area
             
         ii.imsave(self.prefix/"he.jpg", image)
         # save mask.png
@@ -282,8 +282,8 @@ class iStar(SRtools):
         fast_to_csv(self.transfer_cnts(locDF),self.prefix/"cnts.tsv")
 
     def corp_capture_area(self, img):
-        top,left,heigth,width = self.capture_area
-        return img[top:top+heigth,left:left+width]
+        top,left,height,width = self.capture_area
+        return img[top:top+height,left:left+width]
 
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
@@ -352,17 +352,76 @@ class TESLA(SRtools):
 
 class ImSpiRE(SRtools):
     
+    def transfer_image_HD(self, patch_pixel):
+        patch_shape = (patch_pixel, patch_pixel)
+        num_row = self.HDData.profile.row_range
+        num_col = self.HDData.profile.col_range
+        edge = int(self.profile.spot_diameter/self.HDData.bin_size)
+        Hsilde = num_row + edge*2 + 1
+        Wslide = num_col + edge*2 + 1
+        HDdx = (Hsilde-num_row)//2
+        HDdy = (Wslide-num_col)//2
+        bin_patch_shape = [
+            Hsilde,Wslide,*patch_shape
+            ]
+        if self.HDData.image_channels > 1:
+            bin_patch_shape.append(self.HDData.image_channels)
+        
+        patch_array = np.full(bin_patch_shape, fill_value=255, dtype=np.uint8)
+        patch_array[HDdx:HDdx+num_row,HDdy:HDdy+num_col] = self.HDData.crop_patch(patch_shape=patch_shape)
+        for i,j in get_outside_indices((Hsilde,Wslide), HDdx, HDdy, num_row, num_col):
+            x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
+            corners = get_corner(x,y,*patch_shape)
+            cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
+            patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
+            patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
+        img = reconstruct_image(patch_array)
+        binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
+        binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*16  \
+            + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
+        HDmapper = AffineTransform(binsOnImage, binsOnHD)
+        capture_area = (HDdx, HDdy, num_row, num_col)
+        scaleF = HDmapper.resolution/self.HDData.pixel_size
+        return img, capture_area, HDmapper, scaleF
+    
+    def transfer_loc_HD(self, mapper:AffineTransform) -> pd.DataFrame:
+        df = self.locDF.copy(True)
+        df.columns = self.profile.RawColumns
+        df[["pxl_row_in_fullres","pxl_col_in_fullres"]] = \
+            mapper.transform_batch(df[["pxl_row_in_fullres","pxl_col_in_fullres"]].values) 
+        return df
+    
     def convert(self):
-        # save image.tif
-        ii.imsave(self.prefix/"image.tif", self.image)
-        # save h5
-        write_10X_h5(self.adata, self.prefix/"filtered_feature_bc_matrix.h5", self.metadata)
-        # copy spatial folder
-        shutil.copytree(self.path / "spatial", self.prefix / "spatial")
-        # calculate patch size
+        patch_pixel_size = int(self.super_pixel_size/self.pixel_size+0.5)
+
+        if self.HDData == None:
+            self.save(self.prefix)
+            self.super_image_shape = [i//patch_pixel_size for i in self.image.shape[:2]]
+        else:
+            img, capture_area, HDmapper, scaleF = self.transfer_image_HD(patch_pixel_size)
+            locDF = self.transfer_loc_HD(HDmapper)
+            FullImage = np.max(img.shape)
+            scaleFs = {
+                "spot_diameter_fullres": self.scaleF["spot_diameter_fullres"]*scaleF,
+                "tissue_lowres_scalef": self.profile.LowresImage/FullImage,
+                "fiducial_diameter_fullres": self.scaleF["fiducial_diameter_fullres"]*scaleF,
+                "tissue_hires_scalef": self.profile.HiresImage[self.profile.serial]/FullImage
+            }
+            temp_visium = VisiumData(
+                tissue_positions = locDF,
+                feature_bc_matrix = self.adata,
+                scalefactors = scaleFs,
+                metadata = self.metadata.copy()
+            )
+            temp_visium.metadata["software_version"] = "spaceranger-1.3.0"
+            temp_visium.image = img
+            temp_visium.match2profile(VisiumProfile(slide_serial=1), quiet=True)
+            temp_visium.save(self.prefix)
+            self.super_image_shape = [i for i in img.shape[:2]]
+            self.capture_area = capture_area
+        
         with open(self.prefix/"patch_size.txt","w") as f:
-            scale = self.scaleF["tissue_hires_scalef"]*4/self.pixel_size
-            f.write(str(int(np.round(1/scale))))
+            f.write(str(patch_pixel_size))
 
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
@@ -371,8 +430,10 @@ class ImSpiRE(SRtools):
         locDF = pd.read_csv(self.prefix/"result/result_PatchLocations.txt", sep="\t",)
         locDF.columns = ['index', 'row', 'col', 'pxl_row', 'pxl_col', 'in_tissue']
         self.SRresult.index = self.SRresult.index.astype(int)
-        with open(self.prefix/'patch_size.txt') as f:
-            patch_size = int(f.read())
-        locDF["x"] = np.floor(locDF["pxl_row"]/patch_size).astype(int)
-        locDF["y"] = np.floor(locDF["pxl_col"]/patch_size).astype(int)
+        # crop capture area
+        top,left,height,width = self.capture_area
+        mask = top<=locDF["row"]<top+height and left<=locDF["col"]<left+width
+        locDF = locDF[mask]
+        locDF["x"] = locDF["row"] - top
+        locDF["y"] = locDF["col"] - left
         self.SRresult = pd.merge(locDF, self.SRresult, left_index=True, right_index=True).iloc[:, 6:]

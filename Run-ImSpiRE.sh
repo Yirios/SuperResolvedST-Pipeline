@@ -1,7 +1,7 @@
 
 prefix=$1
 
-export patch_size=$(cat ${prefix}patch_size.txt)
+export patch_size=$(cat ${prefix}/patch_size.txt)
 export cores=$(($(grep -c ^processor /proc/cpuinfo) / 2))
 
 ImSpiRE -i ${prefix} \

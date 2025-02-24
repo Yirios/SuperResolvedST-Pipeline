@@ -1,7 +1,7 @@
 
 from pathlib import Path
 from typing import List, Dict, Tuple
-import copy
+import copy, re
 
 import numpy as np
 import cv2
@@ -39,6 +39,8 @@ class rawData:
 
     def _read_location(self) -> pd.DataFrame:
         file = self.path/"spatial/tissue_positions.csv"
+        if not file.exists():
+            file = self.path/"spatial/tissue_positions_list.csv"
         self.locDF = pd.read_csv(file,header=None)
         self.locDF.columns = Profile.RawColumns
         return self.locDF
@@ -71,7 +73,18 @@ class rawData:
             self.read_image(Path(source_image_path))
 
     def _save_location(self,path):
-        self.locDF.to_csv(path/"spatial/tissue_positions.csv", index=False, header=False)
+        software_version = self.metadata.get("software_version", "")
+        pattern = r"spaceranger-(\d+)\.\d+\.\d+"
+        match = re.search(pattern, software_version)
+        if match:
+            version_major = int(match.group(1))
+        else:
+            version_major = 1
+        if version_major >= 2:
+            file_name = "tissue_positions.csv"
+        else:
+            file_name = "tissue_positions_list.csv"
+        self.locDF.to_csv(path/f"spatial/{file_name}", index=False, header=False)
 
     def _save_scalefactors(self, path):
         write_json(path/"spatial/scalefactors_json.json", self.scaleF)
@@ -99,13 +112,14 @@ class rawData:
         self._save_scalefactors(path)
         self._save_location(path)
 
-    def match2profile(self, profile:Profile):
+    def match2profile(self, profile:Profile, quiet=False):
         self.profile = profile
         # keep order
         order = self.profile.tissue_positions[["array_row", "array_col"]].values.tolist()
         raw_order = self.locDF[["array_row", "array_col"]].values.tolist()
         if not np.array_equal(order, raw_order):
-            print("Unable to match the profile, transferring to the specified profile.")
+            if not quiet:
+                print("Unable to match the profile, transferring to the specified profile.")
             temp = self.locDF.set_index(["array_row", "array_col"])
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)
