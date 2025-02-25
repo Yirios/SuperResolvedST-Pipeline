@@ -261,6 +261,10 @@ class VisiumHDData(rawData):
         pass
 
     def crop_patch(self, patch_size=None, patch_shape=None):
+        '''
+        patch_size: edge of patch image in um
+        patch_shape: image shape of patch
+        '''
         if not patch_size:
             patch_size = self.bin_size
         if not patch_shape:
@@ -283,7 +287,7 @@ class VisiumHDData(rawData):
         
         patch_array = np.full(bin_patch_shape, fill_value=255, dtype=np.uint8)
         for id,(i,j),(x,y,_) in bins():
-            corners = get_corner(x,y,*patch_shape)
+            corners = get_corner(x, y, patch_size, patch_size)
             cornerOnImage = self.mapper.transform_batch(np.array(corners))
             patchOnImage = crop_single_patch(self.image, cornerOnImage)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)

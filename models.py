@@ -214,7 +214,7 @@ class iStar(SRtools):
         patch_array[HDdx:HDdx+num_row,HDdy:HDdy+num_col] = self.HDData.crop_patch(patch_shape=patch_shape)
         for i,j in get_outside_indices((H16,W16), HDdx, HDdy, num_row, num_col):
             x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
-            corners = get_corner(x,y,*patch_shape)
+            corners = get_corner(x,y,self.HDData.bin_size,self.HDData.bin_size)
             cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
             patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
@@ -356,9 +356,9 @@ class ImSpiRE(SRtools):
         patch_shape = (patch_pixel, patch_pixel)
         num_row = self.HDData.profile.row_range
         num_col = self.HDData.profile.col_range
-        edge = int(self.profile.spot_diameter/self.HDData.bin_size)
-        Hsilde = num_row + edge*2 + 1
-        Wslide = num_col + edge*2 + 1
+        visium_w,visium_h = self.profile.frame
+        Hsilde = max(num_row, int(visium_h/self.HDData.bin_size+1)) + 4
+        Wslide = max(num_col, int(visium_w/self.HDData.bin_size+1)) + 4
         HDdx = (Hsilde-num_row)//2
         HDdy = (Wslide-num_col)//2
         bin_patch_shape = [
@@ -371,7 +371,7 @@ class ImSpiRE(SRtools):
         patch_array[HDdx:HDdx+num_row,HDdy:HDdy+num_col] = self.HDData.crop_patch(patch_shape=patch_shape)
         for i,j in get_outside_indices((Hsilde,Wslide), HDdx, HDdy, num_row, num_col):
             x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
-            corners = get_corner(x,y,*patch_shape)
+            corners = get_corner(x,y,self.HDData.bin_size,self.HDData.bin_size)
             cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
             patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
@@ -417,7 +417,7 @@ class ImSpiRE(SRtools):
             temp_visium.image = img
             temp_visium.match2profile(VisiumProfile(slide_serial=1), quiet=True)
             temp_visium.save(self.prefix)
-            self.super_image_shape = [i for i in img.shape[:2]]
+            self.super_image_shape = [i//patch_pixel_size for i in img.shape[:2]]
             self.capture_area = capture_area
         
         with open(self.prefix/"patch_size.txt","w") as f:
@@ -432,8 +432,11 @@ class ImSpiRE(SRtools):
         self.SRresult.index = self.SRresult.index.astype(int)
         # crop capture area
         top,left,height,width = self.capture_area
-        mask = top<=locDF["row"]<top+height and left<=locDF["col"]<left+width
-        locDF = locDF[mask]
+        capture_mask = (
+            locDF["row"].between(top, top + height, inclusive="left") & \
+            locDF["col"].between(left, left + width, inclusive="left")
+        )
+        locDF = locDF[capture_mask]
         locDF["x"] = locDF["row"] - top
         locDF["y"] = locDF["col"] - left
         self.SRresult = pd.merge(locDF, self.SRresult, left_index=True, right_index=True).iloc[:, 6:]
