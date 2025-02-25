@@ -1,4 +1,4 @@
-## SuperResolvedST-Pipline
+## SuperResolvedST-Pipeline
 SuperResolvedST-Pipeline is designed to integrate multiple super-resolution tools into the analysis of spatial transcriptomics (ST) data.
 
 已经通过测试的 GPU 环境
