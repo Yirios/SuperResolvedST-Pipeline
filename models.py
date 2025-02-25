@@ -377,7 +377,7 @@ class ImSpiRE(SRtools):
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
         img = reconstruct_image(patch_array)
         binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
-        binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*16  \
+        binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*patch_pixel  \
             + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
         HDmapper = AffineTransform(binsOnImage, binsOnHD)
         capture_area = (HDdx, HDdy, num_row, num_col)
