@@ -163,12 +163,12 @@ def write_10X_h5(adata:AnnData, file:Path, metadata={}) -> None:
         # Optionally add more metadata fields if needed
         if 'genome' in adata.var.columns:
             ftrs.create_dataset("genome", data=np.array(adata.var['genome'], dtype=f'S{str_max(adata.var["genome"])}'))
-        # set feature_type
-        if 'feature_type' in adata.var.columns:
-            ftrs.create_dataset("feature_type", data=np.array(adata.var['feature_type'], dtype=f'S{str_max(adata.var["feature_type"])}'))
+        # set feature_types
+        if 'feature_types' in adata.var.columns:
+            ftrs.create_dataset("feature_type", data=np.array(adata.var['feature_types'], dtype=f'S{str_max(adata.var["feature_types"])}'))
         else:
-            adata.var['feature_type'] = 'Gene Expression'
-            ftrs.create_dataset("feature_type", data=np.array(adata.var['feature_type'], dtype=f'S{str_max(adata.var["feature_type"])}'))
+            adata.var['feature_types'] = 'Gene Expression'
+            ftrs.create_dataset("feature_type", data=np.array(adata.var['feature_types'], dtype=f'S{str_max(adata.var["feature_types"])}'))
 
 def auto_tissue_mask(img : np.ndarray,
               CANNY_THRESH_1 = 100,
@@ -286,15 +286,22 @@ def crop_single_patch(image:np.ndarray, corners):
     x_min, x_max = max(0, x_min), min(H, x_max)
     y_min, y_max = max(0, y_min), min(W, y_max)
 
-    patch = image[x_min:x_max, y_min:y_max]
-
     white_value = 255 if image_channels == 1 else [255] * image_channels
     patch_filled = np.full(
-        (x_max - x_min + pad_top + pad_bottom, y_max - y_min + pad_left + pad_right, image_channels),
+        (
+            x_max - x_min + pad_top + pad_bottom,
+            y_max - y_min + pad_left + pad_right,
+            image_channels
+        ),
         white_value, dtype=image.dtype
     )
+    if x_max > x_min and y_max > y_min:
+        patch = image[x_min:x_max, y_min:y_max]
 
-    patch_filled[pad_top:pad_top + patch.shape[0], pad_left:pad_left + patch.shape[1]] = patch
+        patch_filled[
+            pad_top:pad_top + patch.shape[0], 
+            pad_left:pad_left + patch.shape[1]
+        ] = patch
 
     return patch_filled
 

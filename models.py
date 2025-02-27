@@ -105,14 +105,21 @@ class SRtools(VisiumData):
         self.load_params()
     
     @timer
-    def to_VisiumHD(self, HDprefix:Path, superHD_demo:VisiumHDData=None):
+    def to_VisiumHD(self, HDprefix:Path=None, superHD_demo:VisiumHDData=None):
         if not (self.HDData or superHD_demo ):
             raise ValueError("Run set_target_VisiumHD frist or set superHD_demo")
         elif superHD_demo:
             self.HDData = superHD_demo
         
-        merged = self.HDData.locDF.merge(self.SRresult, left_on=['array_row', 'array_col'], right_on=['x', 'y'])
-        self.HDData.locDF.loc[self.HDData.locDF.index.isin(merged.index), 'in_tissue'] = 1
+        merged = self.HDData.locDF.reset_index().merge(
+            self.SRresult,
+            left_on=['array_row', 'array_col'],
+            right_on=['x', 'y']
+        )
+
+        self.HDData.locDF['in_tissue'] = 0
+        if not merged.empty:
+            self.HDData.locDF.loc[merged['index'], 'in_tissue'] = 1
 
         genes = self.SRresult.columns[2:]
         self.SRresult = merged.set_index('barcode')[genes]
@@ -121,10 +128,12 @@ class SRtools(VisiumData):
             X=csr_matrix(self.SRresult.to_numpy()),
             obs=pd.DataFrame(index=self.SRresult.index),
             var=self.HDData.adata.var.loc[genes,:])
-        self.HDData.save(HDprefix)
+        if HDprefix != None:
+            self.HDData.save(HDprefix)
+        return self.HDData
 
     @timer
-    def to_csv(self, file=None, sep="\t"):
+    def to_csv(self, file:Path=None, sep="\t"):
         if not file:
             file = self.prefix/"super-resolution.csv"
         with open(file, "w") as f:
@@ -136,13 +145,15 @@ class SRtools(VisiumData):
                 f.write(sep.join(map(str, row)) + "\n")
     
     @timer
-    def to_h5ad(self):
+    def to_h5ad(self, file:Path=None):
+        if not file:
+            file = self.prefix/"super-resolution.h5ad"
         adata = AnnData(self.SRresult.iloc[:,2:])
         adata.obs = self.SRresult.iloc[:, :2]
         adata.var.index = self.SRresult.columns[2:]
         adata.uns["shape"] = list(self.super_image_shape)
         adata.uns["project_dir"] = str(self.prefix.resolve())
-        adata.write_h5ad(self.prefix/"super-resolution.h5ad")
+        adata.write_h5ad(file)
 
 class Xfuse(SRtools):
 
@@ -224,7 +235,7 @@ class iStar(SRtools):
             + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
         HDmapper = AffineTransform(binsOnImage, binsOnHD)
         capture_area = (HDdx, HDdy, num_row, num_col)
-        scaleF = HDmapper.resolution/self.HDData.pixel_size
+        scaleF = 1/HDmapper.resolution
         return img, capture_area, HDmapper, scaleF
     
     def transfer_image_mask_HD(self):
@@ -269,8 +280,8 @@ class iStar(SRtools):
 
         # wirte number of pixels per spot radius
         radius = self.scaleF["spot_diameter_fullres"]/2*scaleF
-        pixel_size_raw = self.pixel_size*scaleF
-        pixel_size = self.super_pixel_size/16
+        pixel_size_raw = self.pixel_size/scaleF
+        pixel_size = self.super_pixel_size
         with open(self.prefix/"radius.txt","w") as f:
             f.write(str(int(np.round(radius))))
         # write side length (in micrometers) of pixels
@@ -315,6 +326,7 @@ class iStar(SRtools):
 
 class soScope(SRtools):
     pass
+
 
 class TESLA(SRtools):
 
@@ -381,7 +393,7 @@ class ImSpiRE(SRtools):
             + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
         HDmapper = AffineTransform(binsOnImage, binsOnHD)
         capture_area = (HDdx, HDdy, num_row, num_col)
-        scaleF = HDmapper.resolution/self.HDData.pixel_size
+        scaleF = 1/HDmapper.resolution
         return img, capture_area, HDmapper, scaleF
     
     def transfer_loc_HD(self, mapper:AffineTransform) -> pd.DataFrame:

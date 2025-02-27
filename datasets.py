@@ -10,7 +10,7 @@ import h5py
 import scanpy as sc
 import imageio.v2 as ii
 import tifffile
-from anndata import AnnData
+from anndata import AnnData, concat as ann_concat
 from scipy.sparse import csr_matrix
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
@@ -62,6 +62,14 @@ class rawData:
             self.image_channels = 1
         else:
             self.image_channels = self.image.shape[2]
+
+    def vision_frame(self, profile:Profile):
+        image = self.image.copy()
+        w,h = profile.frame
+        corner = np.array([[0,0],[0,w],[h,w],[h,0]])
+        cornerOnImage = self.mapper.transform_batch(corner).astype(int)[:,::-1]
+        cv2.drawContours(image, [cornerOnImage], contourIdx=-1, color=(0, 0, 255), thickness=100)
+        return image
     
     @timer
     def load(self, path:Path, source_image_path:Path=None):
@@ -71,6 +79,38 @@ class rawData:
         self._read_location()
         if source_image_path :
             self.read_image(Path(source_image_path))
+
+    def to_anndata(self):
+        df = self.locDF.copy()
+        df.index = df["barcode"]
+        adata = ann_concat(
+            [
+                AnnData(
+                    X=csr_matrix((len(df),0)),
+                    obs=df
+                ),
+                self.adata
+            ],
+            join="outer", 
+            merge="first",
+            axis=1
+        )
+
+        lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
+        hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
+        adata.uns['spatial'] = {
+            self.metadata['library_ids'][0].astype(str):{
+                'images':{
+                    'hires':hires_image/255,
+                    "lowres":lowres_image/255,
+                },
+                'scalefactors':self.scaleF,
+                'metadata':self.metadata
+            }
+        }
+        adata.obsm['spatial'] = adata.obs[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        adata.obs = adata.obs[["in_tissue","array_row","array_col"]]
+        return adata
 
     def _save_location(self,path):
         software_version = self.metadata.get("software_version", "")
@@ -124,13 +164,17 @@ class rawData:
             self.locDF = temp.loc[order]
             self.locDF.reset_index(inplace=True)
             self.locDF = self.locDF[profile.RawColumns]
+        # align anndata
+        self.adata = self.adata[self.locDF.loc[self.locDF['in_tissue']==1,'barcode'].values,:]
         # map to image
         PointsOnFrame = self.profile.tissue_positions[["frame_row","frame_col"]].values
         PointsOnImage = self.locDF[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
         self.mapper = AffineTransform(PointsOnFrame, PointsOnImage)
-        # add in location 
+        # add in location
         self.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = PointsOnImage
         self.pixel_size = self.mapper.resolution
+        # add in barcode
+        self.profile.tissue_positions['barcode'] = self.locDF['barcode']
 
     def select_HVG(self,n_top_genes=2000, min_counts=10) -> None:
         self.adata.var_names_make_unique()
@@ -138,7 +182,7 @@ class rawData:
         sc.pp.highly_variable_genes(self.adata, n_top_genes=n_top_genes, subset=True, flavor='seurat_v3')
 
     def require_genes(self,genes:List[str]) -> None:
-
+        self.adata.var_names_make_unique()
         genes = [gene for gene in genes if gene in self.adata.var_names]
 
         if genes:
@@ -148,19 +192,21 @@ class rawData:
 
 class VisiumData(rawData):
 
-    def load(self, path:Path, profile=VisiumProfile(), source_image_path:Path=None):
+    def load(self, path:Path, profile=VisiumProfile, source_image_path:Path=None):
         super().load(path, source_image_path)
         self.match2profile(profile)
         self.profile:VisiumProfile
 
-    def vision_spots(self, in_tissue=False):
+    def vision_spots(self, in_tissue=False, radius=None, color=(255,0,0)):
         image = self.image.copy()
+        if radius == None:
+            radius = int(self.scaleF['spot_diameter_fullres']/2+0.5)
         if not in_tissue:
             spots = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
         else:
             spots = self.locDF.loc[self.locDF['in_tissue']==1, ["pxl_col_in_fullres","pxl_row_in_fullres"]].values
         for pt in spots:
-            cv2.circle(image, tuple(pt), 50, (255,0,0), -1)
+            cv2.circle(image, tuple(pt), radius, color, -1)
         return image
     
     def _bin2image(self, profile:VisiumHDProfile, frame_center:Tuple[float, float]):
@@ -178,7 +224,7 @@ class VisiumData(rawData):
     def drop_spots(self, spot_ids:List, in_place=False) :
         if not in_place:
             dropped = copy.deepcopy(self)
-            dropped.drop_spots(spot_ids,in_place=True)
+            dropped.drop_spots(spot_ids, in_place=True)
             return dropped
         drop_mask = self.profile.tissue_positions["id"].isin(spot_ids)
         tissue_mask = self.locDF["in_tissue"].values == 1
@@ -253,7 +299,17 @@ class VisiumHDData(rawData):
             warnings.warn(f"bin size of VisiumHD is {self.bin_size}, but profile recommend {profile.bin_size}, Start Rebinnig")
             self.rebining()
         self.match2profile(profile)
-
+    
+    def vision_bins(self, in_tissue=True):
+        image = self.image.copy()
+        if not in_tissue:
+            bins = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        else:
+            bins = self.locDF.loc[self.locDF['in_tissue']==1, ["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        for pt in bins:
+            cv2.circle(image, tuple(pt), 5, (0,255,0), -1)
+        return image
+    
     def rebining(self, profile:VisiumHDProfile) -> "VisiumHDData":
         '''\
         TODO bin in user define profile
@@ -301,15 +357,15 @@ class VisiumHDData(rawData):
         '''
         if {"pxl_row_in_fullres", "pxl_col_in_fullres"} <= set(profile.tissue_positions.columns):
             return profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]]
-        x0 = frame_center[0]-self.profile.frame[1]/2
-        y0 = frame_center[1]-self.profile.frame[0]/2
+        x0 = frame_center[0]-profile.frame[1]/2
+        y0 = frame_center[1]-profile.frame[0]/2
         spotsOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values + np.array([[x0,y0]])
         spotsOnImage = self.mapper.transform_batch(spotsOnFrame)
         profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = spotsOnImage
 
         return spotsOnImage
     
-    def HD2Visium(self, profile:VisiumProfile, uncover_thresholds=0, **kwargs) -> VisiumData:
+    def HD2Visium(self, profile:VisiumProfile, uncover_thresholds=0, min_bin=0, **kwargs) -> VisiumData:
         readyHD = {'spot_label', "pxl_row_in_fullres", "pxl_col_in_fullres"}  <= \
             set(self.profile.tissue_positions.columns)
         readyVisium = {"num_bin_out_spot","num_bin_in_spot"}  <= \
@@ -339,7 +395,7 @@ class VisiumHDData(rawData):
 
             mask_in_spot = self.profile.tissue_positions["spot_label"] == id + 1
             mask = mask_in_spot[mask_in_tissue].values
-            if mask.any():
+            if np.sum(mask) > min_bin:
                 bin_in_spot = self.adata.X[mask]
                 spot_data = bin_in_spot.sum(axis=0).A1
                 gene_index = np.where(spot_data>0)[0]

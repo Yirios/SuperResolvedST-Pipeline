@@ -27,12 +27,16 @@ class VisiumProfile(Profile):
     SERIAL_SMALL = (1,4)
     SERIAL_LARGE = (5)
     SERIAL_CytAssist = (4,5)
-    def __init__(self, slide_serial=1):
+    def __init__(
+            self,
+            slide_serial=1,
+            row_range=None, col_range=None, spot_step=None
+        ):
         '''\
         https://www.10xgenomics.com/support/software/space-ranger/latest/analysis/inputs/image-slide-parameters
         '''
         self.spot_diameter = 55.0
-        self.spot_step = 100.0
+        self.spot_step = spot_step if spot_step!=None else 100.0
         if slide_serial in VisiumProfile.SERIAL_SMALL:
             # even numbers from 0 to 126 for even rows, and odd numbers from 1 to 127 for odd rows with each row (even or odd) resulting in 64 spots.
             self.row_range = 78
@@ -43,6 +47,10 @@ class VisiumProfile(Profile):
             self.col_range = 111
         else:
             raise ValueError("Unsupported version")
+        if row_range != None:
+            self.row_range = row_range
+        if col_range != None:
+            self.col_range = col_range
         self.serial = slide_serial
         self.tissue_positions =  self.__get_dataframe()
         self.metadata = {
@@ -113,10 +121,10 @@ class VisiumProfile(Profile):
 
 class VisiumHDProfile(Profile):
     HiresImage = 6000
-    def __init__(self, bin_size=2):
+    def __init__(self, bin_size=2, row_range=3350, col_range=3350):
         self.bin_size = 2
-        self.row_range = 3350
-        self.col_range = 3350
+        self.row_range = row_range
+        self.col_range = col_range
         if bin_size != 2: 
             self.reset(bin_size)
         self.tissue_positions = self.__get_dataframe()
@@ -274,7 +282,7 @@ def align_profile(HDprofile:VisiumHDProfile, profile:VisiumProfile, mode="center
                         uncovered[id] += 1
                     else:
                         spot_label_image[i,j] = id + 1
-                        spot_label[i*HDprofile.col_range+j] = id
+                        spot_label[i*HDprofile.col_range+j] = id + 1
                         covered[id] += 1
             if not quiet and uncovered[id]:
                 covered_rate = 100 * covered[id] / (uncovered[id]+covered[id])
