@@ -1,4 +1,7 @@
 ## SuperResolvedST-Pipeline
+
+**Read this in other languages: [English](README.md), [中文](README.zh.md).**
+
 SuperResolvedST-Pipeline 旨在将多种超分辨率工具整合到空间转录组学（ST）数据分析中。本流程设计了两种工作模式：一是输出图像形式的超分结果，二是输出 VisiumHD 格式的超分结果。前者适用于对图像完整性高度敏感的研究，后者会对图像进行裁减和重组，但是有很高的空间准确性，可以将误差控制在像素大小的5%，适用于对空间位置敏感的研究。
 
 已经通过测试的 GPU 环境
