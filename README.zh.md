@@ -17,4 +17,4 @@ SuperResolvedST-Pipeline 旨在将多种超分辨率工具整合到空间转录�
 ### Tutorials and Analyses Pipeline
 
 - [tutorials.ipynb](tutorials.ipynb) 中给出了几个基础超分流程。
-- [analyses](analyses/README.md) 中给出了具体几个分析示例，和 Benchmark 方法。
+- [analyses](analyses) 中给出了具体几个分析示例，和 Benchmark 方法。
