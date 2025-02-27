@@ -20,4 +20,4 @@ GPU environments that have passed the test
 ### Tutorials and Analyses Pipeline
 
 - A few basic super resolved pipelines are given in [tutorials.ipynb](tutorials.ipynb).
-- The [analyses](analyses/README.md) gives a few specific examples of analyses, and the Benchmark method.
+- The [analyses](analyses) gives a few specific examples of analyses, and the Benchmark method.
