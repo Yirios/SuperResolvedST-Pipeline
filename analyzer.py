@@ -132,8 +132,44 @@ class Pipeline:
         else :
             raise ValueError("Unsupported format")
     
-    def run_HD2Visium(self):
-        pass
+    def run_HD2Visium(input_path, source_image_path, output_path,format,bin_size,
+                      slide_serial=DEFAULT_VISIUM_SERIAL,
+                      preprocess:Dict=DEFAULT_PREPROCESS,
+                      ):
+        visiumHD_path = Path(input_path)
+        output_path = Path(output_path)
+
+        visium_profile = VisiumProfile(slide_serial=slide_serial)
+        visiumHD_profile = VisiumHDProfile(bin_size=bin_size)
+        HDdata = VisiumHDData()
+        HDdata.load(
+            path=visiumHD_path,
+            profile=visiumHD_profile,
+            source_image_path=source_image_path
+        )
+        
+        # preprocessing
+        ## select gene
+        if preprocess.get("require_genes", False):
+            validate_file(preprocess["require_genes"])
+            with open(preprocess["require_genes"], "r") as f:
+                content = f.read()
+                genes = content.rstrip().split()
+                print(genes)
+            HDdata.require_genes(genes=genes)
+        elif preprocess.get("n_top_hvg", False):
+            HDdata.select_HVG(n_top_genes=2000)
+        
+        # merging bin in spot
+        emulate_visium = HDdata.HD2Visium(visium_profile)
+
+        # save as Visium
+        if format == "raw":
+            emulate_visium.save(output_path)
+        elif format == "h5ad":
+            emulate_visium.to_anndata().write_h5ad(output_path/"emulate_visium.h5ad")
+        else :
+            raise ValueError("Unsupported format")
 
     def run_Benchmark(self):
         pass
@@ -223,7 +259,9 @@ def hd2visium(args):
     print(f"  Output Dir: {args.output}")
     print(f"  Format: {args.format}")
     print(f"  Preprocessing: {preprocess_params}")
-    print(f"  Postprocessing: {postprocess_params}")
+    Pipeline.run_HD2Visium(
+
+    )
 
 def benchmark(args):
     preprocess_params = parse_key_value_pairs(args.preprocess, DEFAULT_PREPROCESS)
