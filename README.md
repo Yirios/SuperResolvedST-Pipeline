@@ -14,7 +14,15 @@ GPU environments that have passed the test
 1. It is recommended to use conda to isolate the running environment of each tool, this procedure has made minor modifications to some tools. Please refer to the installation instructions of the corresponding tools in the root directory for specific installation methods.
 
 ### Quick Start
-
+```
+python analyzer.py Visium2HD \
+    -i /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673 \
+    --source_image_path /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/151673_full_image.tif \
+    -o . \
+    -f h5ad \
+    --model iStar  
+    --preprocess mask_image=/home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/mask.png 
+```
 ### Benchmark
 
 ### Tutorials and Analyses Pipeline

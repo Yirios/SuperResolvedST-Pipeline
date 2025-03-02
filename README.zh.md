@@ -14,7 +14,32 @@ SuperResolvedST-Pipeline 旨在将多种超分辨率工具整合到空间转录�
 1. 建议使用 conda 隔离每个工具的运行环境，本流程对一些工具进行了小修改。具体安装方法请参照根目录下对应工具的安装指导。
 
 ### Quick Start
-
+```
+python analyzer.py Visium2HD \
+    -i /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673 \
+    --source_image_path /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/151673_full_image.tif \
+    -o test_Visium2HD \
+    -f h5ad \
+    --model iStar \
+    --preprocess mask_image=/home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/mask.png 
+```
+```
+python analyzer.py HD2Visium \
+    -i /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/binned_outputs/square_002um \
+    --source_image_path /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/Visium_HD_Mouse_Brain_Fresh_Frozen_tissue_image.tif \
+    -o test_HD2Visium \
+    -f raw
+```
+```
+python analyzer.py Benchmark \
+    -i /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/binned_outputs/square_002um \
+    --source_image_path /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/Visium_HD_Mouse_Brain_Fresh_Frozen_tissue_image.tif \
+    -o test_Benchmark \
+    -f h5ad \
+    --super_pixel_size 16 \
+    --rebin False \
+    --model iStar
+```
 ### Benchmark
 
 ### Tutorials and Analyses Pipeline

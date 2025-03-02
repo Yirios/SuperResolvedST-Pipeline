@@ -297,7 +297,8 @@ class VisiumHDData(rawData):
         self.pixel_size = self.scaleF["microns_per_pixel"]
         if profile.bin_size != self.bin_size:
             warnings.warn(f"bin size of VisiumHD is {self.bin_size}, but profile recommend {profile.bin_size}, Start Rebinnig")
-            self.rebining()
+            self = self.rebining(profile=profile)
+            return None
         self.match2profile(profile)
     
     def vision_bins(self, in_tissue=True):
@@ -310,11 +311,82 @@ class VisiumHDData(rawData):
             cv2.circle(image, tuple(pt), 5, (0,255,0), -1)
         return image
     
-    def rebining(self, profile:VisiumHDProfile) -> "VisiumHDData":
+    def rebining(self, profile:VisiumHDProfile, min_bin=0) -> "VisiumHDData":
         '''\
         TODO bin in user define profile
         '''
-        pass
+        if profile.bin_size%self.bin_size!=0:
+            raise ValueError()
+        step = profile.bin_size//self.bin_size
+        self.profile.tissue_positions['new_array_row'] = self.profile.tissue_positions['array_row'] // step
+        self.profile.tissue_positions['new_array_col'] = self.profile.tissue_positions['array_col'] // step
+        self.profile.tissue_positions['bin_label'] = \
+            1 + self.profile.tissue_positions['new_array_row'] * profile.col_range + self.profile.tissue_positions['new_array_col']
+        self.profile.tissue_positions.loc[self.profile.tissue_positions['bin_label']>=len(profile),'bin_label'] = 0
+        bin_iter = progress_bar(
+            title="Merge the gene expression from small bins to large bin",
+            iterable=range(len(profile)),
+            total=len(profile)
+        )
+        X_indptr = [0]
+        X_indices = np.zeros(0)
+        X_data = np.zeros(0)
+        bin_in_tissue = np.zeros(len(profile), dtype=int)
+        mask_in_tissue = self.locDF["in_tissue"] == 1
+        for id in bin_iter():
+
+            mask_in_spot = self.profile.tissue_positions["bin_label"] == id + 1
+            mask = mask_in_spot[mask_in_tissue].values
+            if np.sum(mask) > min_bin:
+                bin_in_spot = self.adata.X[mask]
+                spot_data = bin_in_spot.sum(axis=0).A1
+                gene_index = np.where(spot_data>0)[0]
+                X_indices = np.hstack((X_indices, gene_index))
+                X_data = np.hstack((X_data, spot_data[gene_index]))
+                X_indptr.append(X_indptr[-1]+len(gene_index))
+                bin_in_tissue[id] = 1
+            else:
+                bin_in_tissue[id] = 0
+        
+        tissue_positions = profile.tissue_positions[["barcode","array_row","array_col"]].copy()
+        spotsOnFrame = profile.tissue_positions[["frame_row","frame_col"]].values
+        spotsOnImage = self.mapper.transform_batch(spotsOnFrame)
+        tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]] = spotsOnImage
+        tissue_positions["in_tissue"] = bin_in_tissue
+        tissue_positions = tissue_positions[profile.RawColumns]
+        
+        X_sparse = csr_matrix((X_data, X_indices, X_indptr), shape=(np.sum(bin_in_tissue), len(self.adata.var)))
+        mask_in_tissue = bin_in_tissue == 1
+        adata = AnnData(
+            X=X_sparse,
+            var=self.adata.var,
+            obs=pd.DataFrame(index=tissue_positions.loc[mask_in_tissue,"barcode"].values)
+        )
+
+        metadata = profile.metadata.copy()
+        metadata["library_ids"] = self.metadata["library_ids"]
+
+        FullImage = np.max(self.image.shape)
+        scaleF = {
+            "bin_size_um": profile.bin_size,
+            "fiducial_diameter_fullres": self.scaleF["fiducial_diameter_fullres"],
+            "microns_per_pixel": self.scaleF["microns_per_pixel"],
+            "regist_target_img_scalef": profile.HiresImage/FullImage,
+            "spot_diameter_fullres": profile.bin_size/self.pixel_size,
+            "tissue_lowres_scalef": profile.LowresImage/FullImage,
+            "tissue_hires_scalef": profile.HiresImage/FullImage
+        }
+        rebinHD = VisiumHDData(
+            tissue_positions = tissue_positions,
+            feature_bc_matrix = adata,
+            scalefactors = scaleF,
+            metadata = metadata
+        )
+        rebinHD.match2profile(profile)
+        rebinHD.image = self.image
+        rebinHD.pixel_size = self.pixel_size
+
+        return rebinHD
 
     def crop_patch(self, patch_size=None, patch_shape=None):
         '''
