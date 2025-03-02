@@ -12,16 +12,17 @@ GPU environments that have passed the test
 
 ### Install
 1. It is recommended to use conda to isolate the running environment of each tool, this procedure has made minor modifications to some tools. Please refer to the installation instructions of the corresponding tools in the root directory for specific installation methods.
+2. Install the dependencies required by this pipeline.
+3. Configure the environment variables required by this pipeline. Edit the [config.yaml](config.yaml) file, use the full path if possible.
 
 ### Quick Start
 ```
 python analyzer.py Visium2HD \
-    -i /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673 \
-    --source_image_path /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/151673_full_image.tif \
-    -o . \
+    -i /path/to/Visium_rawdata \
+    --source_image_path /path/to/image \
+    -o test_Visium2HD \
     -f h5ad \
-    --model iStar  
-    --preprocess mask_image=/home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/mask.png 
+    --model iStar
 ```
 ### Benchmark
 

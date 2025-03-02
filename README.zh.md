@@ -12,8 +12,20 @@ SuperResolvedST-Pipeline 旨在将多种超分辨率工具整合到空间转录�
 
 ### Install
 1. 建议使用 conda 隔离每个工具的运行环境，本流程对一些工具进行了小修改。具体安装方法请参照根目录下对应工具的安装指导。
+2. 安装本流程所需的依赖。
+3. 配置本流程所需的环境变量，编辑[config.yaml](config.yaml)文件，尽量使用完整路径。
 
 ### Quick Start
+
+将 VisiumHD 数据合并成 Visium 数据
+```
+python analyzer.py HD2Visium \
+    -i /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/binned_outputs/square_002um \
+    --source_image_path /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/Visium_HD_Mouse_Brain_Fresh_Frozen_tissue_image.tif \
+    -o test_HD2Visium \
+    -f raw
+```
+将 Visium 超分 
 ```
 python analyzer.py Visium2HD \
     -i /home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673 \
@@ -23,13 +35,7 @@ python analyzer.py Visium2HD \
     --model iStar \
     --preprocess mask_image=/home/yiriso/Research/Super-resolvedST/data/DLPFC/sample_151673/mask.png 
 ```
-```
-python analyzer.py HD2Visium \
-    -i /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/binned_outputs/square_002um \
-    --source_image_path /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/Visium_HD_Mouse_Brain_Fresh_Frozen_tissue_image.tif \
-    -o test_HD2Visium \
-    -f raw
-```
+执行 Benchmark，这将从 VisiumHD 数据构建 Pseudo_Visium，然后再超分到 VisiumHD 的分辨率。
 ```
 python analyzer.py Benchmark \
     -i /data/datasets/Visium_HD_Mouse_Brain_Fresh_Frozen/binned_outputs/square_002um \
@@ -42,7 +48,7 @@ python analyzer.py Benchmark \
 ```
 ### Benchmark
 
-### Tutorials and Analyses Pipeline
+### Tutorials and Analyses Pipeline in NoteBook
 
 - [tutorials.ipynb](tutorials.ipynb) 中给出了几个基础超分流程。
 - [analyses](analyses) 中给出了具体几个分析示例，和 Benchmark 方法。

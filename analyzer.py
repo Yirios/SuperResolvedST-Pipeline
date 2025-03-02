@@ -17,9 +17,8 @@ import os
 import yaml
 import json
 
-# 配置文件可能的路径
 CONFIG_PATHS = [
-    os.path.join(os.getcwd(), "config.yaml"),        # 当前目录下
+    os.path.join(os.getcwd(), "config.yaml")
 ]
 OUTPUT_FORMAT = ["raw", "h5ad"]
 
@@ -261,7 +260,7 @@ class Pipeline:
             raise ValueError("Unsupported format")
 
 def parse_key_value_pairs(pair_list, default_dict):
-    """解析 key=value 格式的参数，并将其与默认值合并"""
+    """Parse parameters in key=value format and merge them with default values."""
     parsed = default_dict.copy()
     if pair_list:
         for pair in pair_list:
@@ -270,48 +269,48 @@ def parse_key_value_pairs(pair_list, default_dict):
                 parsed[key] = value
             except ValueError:
                 raise argparse.ArgumentTypeError(
-                    f"参数格式错误: '{pair}'，应为 key=value 格式"
+                    f"Invalid parameter format: '{pair}'. Expected key=value format."
                 )
     return parsed
 
 def validate_directory(path):
-    """验证输入目录是否存在"""
+    """Validate that the input directory exists."""
     if not os.path.isdir(path):
-        raise argparse.ArgumentTypeError(f"错误: 目录 '{path}' 不存在")
+        raise argparse.ArgumentTypeError(f"Error: Directory '{path}' does not exist")
     return path
 
 def ensure_directory(path):
-    """确保输出目录存在，不存在则自动创建"""
+    """Ensure that the output directory exists; create it if it doesn't."""
     os.makedirs(path, exist_ok=True)
     return path
 
 def validate_file(path):
-    """验证文件是否存在"""
+    """Validate that the file exists."""
     if not os.path.isfile(path):
-        raise argparse.ArgumentTypeError(f"错误: 文件 '{path}' 不存在")
+        raise argparse.ArgumentTypeError(f"Error: File '{path}' does not exist")
     return path
 
 def common_args(parser):
-    """为所有子命令添加通用参数"""
+    """Add common arguments for all subcommands."""
     parser.add_argument("-i", "--input", required=True, type=validate_directory,
-                        help="输入文件夹路径")
+                        help="Input directory path")
     parser.add_argument("-o", "--output", required=True, type=ensure_directory,
-                        help="输出文件夹路径")
+                        help="Output directory path")
     parser.add_argument("-f", "--format", choices=OUTPUT_FORMAT,
                         default=DEFAULT_FORMAT,
-                        help="保存格式")
+                        help="Output format")
     parser.add_argument("--source_image_path", required=True, type=validate_file,
-                        help="原始显微图像文件")
+                        help="Original microscopic image file")
     parser.add_argument("--visium_serial", choices=[1, 4, 5],
                         default=DEFAULT_VISIUM_SERIAL,
                         help="10X Visium slide serial number \
                             https://www.10xgenomics.com/support/software/space-ranger/latest/analysis/inputs/image-slide-parameters#slide-serial-numbers")
     parser.add_argument("--preprocess", nargs="*", 
                         default=[],
-                        help=f"预处理参数（默认: {DEFAULT_PREPROCESS}，格式: key=value）")
+                        help=f"Preprocessing parameters (default: {DEFAULT_PREPROCESS}, format: key=value)")
     parser.add_argument("--postprocess", nargs="*", 
                         default=[],
-                        help=f"后处理参数（默认: {DEFAULT_POSTPROCESS}，格式: key=value）")
+                        help=f"Postprocessing parameters (default: {DEFAULT_POSTPROCESS}, format: key=value)")
 
 def visium2hd(args):
     preprocess_params = parse_key_value_pairs(args.preprocess, DEFAULT_PREPROCESS)
@@ -381,42 +380,42 @@ def benchmark(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Tool for processing Visium and VisiumHD data",
+        description="This Pipeline is designed to integrate multiple super-resolution tools into spatial transcriptomics (ST) data analysis.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # HD2Visium 子命令（不需要模型选项）
+    # HD2Visium subcommand (model option not needed)
     parser_h2v = subparsers.add_parser("HD2Visium", help="Convert VisiumHD to Visium")
     common_args(parser_h2v)
     parser_h2v.add_argument("--bin_size", type=int, default=2,
-                           help=f"用于合并的分箱大小（默认: 2）")
+                           help="Bin size for merging spots (default: 2)")
     parser_h2v.set_defaults(func=hd2visium)
 
-    # Visium2HD 子命令：添加模型选项和超像素大小
-    parser_v2hd = subparsers.add_parser("Visium2HD", help="Convert Visium to VisiumHD")
+    # Visium2HD subcommand: add model option and super pixel size
+    parser_v2hd = subparsers.add_parser("Visium2HD", help="Super-resolution Visium to VisiumHD")
     common_args(parser_v2hd)
     parser_v2hd.add_argument("--super_pixel_size", type=int,
                              default=DEFAULT_SUPER_PIXEL_SIZE,
-                             help=f"超像素大小（默认: {DEFAULT_SUPER_PIXEL_SIZE}）")
+                             help=f"Super pixel size (default: {DEFAULT_SUPER_PIXEL_SIZE})")
     parser_v2hd.add_argument("--model", choices=SUPPORTED_TOOLS,
                              default=DEFAULT_MODEL,
-                             help=f"超分模型选项")
+                             help="Super-resolution model option")
     parser_v2hd.set_defaults(func=visium2hd)
 
-    # Benchmark 子命令：添加方法、模型选项和超像素大小
-    parser_bm = subparsers.add_parser("Benchmark", help="Benchmark different processing methods")
+    # Benchmark subcommand: add method, model option, and super pixel size
+    parser_bm = subparsers.add_parser("Benchmark", help="Benchmark different super-resolution tools")
     common_args(parser_bm)
     parser_bm.add_argument("--bin_size", type=int, default=2,
-                           help=f"用于合并 spot 的 bin 大小（默认: 2）")
+                           help="Bin size for merging spots (default: 2)")
     parser_bm.add_argument("--no-rebin", dest="rebin", action="store_false",
-                        help="不将 bin 合并成超像素大小（默认: True）")
+                        help="Do not merge bins into super pixel size (default: True)")
     parser_bm.add_argument("--super_pixel_size", type=int,
                            default=DEFAULT_SUPER_PIXEL_SIZE,
-                           help=f"超像素大小（默认: {DEFAULT_SUPER_PIXEL_SIZE}）")
+                           help=f"Super pixel size (default: {DEFAULT_SUPER_PIXEL_SIZE})")
     parser_bm.add_argument("--model", choices=SUPPORTED_TOOLS,
                            default=DEFAULT_MODEL,
-                           help=f"超分模型选项")
+                           help="Super-resolution model option")
     parser_bm.set_defaults(func=benchmark)
 
     return parser.parse_args()
@@ -427,3 +426,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
