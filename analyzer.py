@@ -102,7 +102,7 @@ class Pipeline:
                 print(genes)
             self.SRmodel.require_genes(genes=genes)
         elif preprocess.get("n_top_hvg", False):
-            self.SRmodel.select_HVG(n_top_genes=2000)
+            self.SRmodel.select_HVG(n_top_genes=preprocess["n_top_hvg"])
 
         # match and build visiumHD struct
         HD_profile = VisiumHDProfile(bin_size=super_pixel_size)
@@ -159,7 +159,7 @@ class Pipeline:
                 print(genes)
             HDdata.require_genes(genes=genes)
         elif preprocess.get("n_top_hvg", False):
-            HDdata.select_HVG(n_top_genes=2000)
+            HDdata.select_HVG(n_top_genes=preprocess["n_top_hvg"])
         
         # merging bin in spot
         emulate_visium = HDdata.HD2Visium(visium_profile)
@@ -203,7 +203,7 @@ class Pipeline:
                 print(genes)
             HDdata.require_genes(genes=genes)
         elif preprocess.get("n_top_hvg", False):
-            HDdata.select_HVG(n_top_genes=2000)
+            HDdata.select_HVG(n_top_genes=preprocess["n_top_hvg"])
         
         # merging bin in spot
         emulate_visium = HDdata.HD2Visium(visium_profile)
