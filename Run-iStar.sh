@@ -5,9 +5,9 @@ prefix=$1  # e.g. data/demo/
 num_jobs=2
 num_states=5
 device="cuda"  # "cuda" or "cpu"
+iStar="../istar/istar-master/"
 
-cd ../istar/istar-master/
-
+cd ${iStar}
 # extract histology features
 python extract_features.py ${prefix} --device=${device}
 

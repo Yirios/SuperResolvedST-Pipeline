@@ -1,0 +1,32 @@
+global:
+  supported_tools:  [
+    "iStar", "xfuse", "ImSpiRE", "TESLA"
+  ]
+  conda_env_prefix:
+    iStar:  "iStar"
+    xfuse:  "xfuse"
+    ImSpiRE:  "imspire"
+    TESLA:  "TESLA"
+  temp_dir:
+    iStar:  "./iStar/temp"
+    xfuse:  "./xfuse/temp"
+    ImSpiRE:  "./ImSpiRE/temp"
+    TESLA:  "./TESLA/temp"
+  tool_scripts:
+    iStar:  "./Run-iStar.sh"
+    xfuse:  "./Run-xfuse.sh"
+    ImSpiRE:  "./Run-ImSpiRE.sh"
+    TESLA:  "python ./Run-TESLA.py"
+default:
+  visium_serial:  1
+  format: "h5ad"
+  super_pixel_size: 16
+  model: "iStar"
+  preprocess:
+    n_top_hvg: 2000
+    min_counts: 10
+    auto_mask: True
+    mask_image: False
+    require_genes: False
+  postprocess:
+    normalize: False

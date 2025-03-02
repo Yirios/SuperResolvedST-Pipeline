@@ -13,7 +13,7 @@ GPU environments that have passed the test
 ### Install
 1. It is recommended to use conda to isolate the running environment of each tool, this procedure has made minor modifications to some tools. Please refer to the installation instructions of the corresponding tools in the root directory for specific installation methods.
 
-### Quite Start
+### Quick Start
 
 ### Benchmark
 

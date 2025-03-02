@@ -13,7 +13,7 @@ SuperResolvedST-Pipeline 旨在将多种超分辨率工具整合到空间转录�
 ### Install
 1. 建议使用 conda 隔离每个工具的运行环境，本流程对一些工具进行了小修改。具体安装方法请参照根目录下对应工具的安装指导。
 
-### Quite Start
+### Quick Start
 
 ### Benchmark
 
