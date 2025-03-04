@@ -1,6 +1,6 @@
 from pathlib import Path
 import pickle
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 import shutil
 
@@ -157,22 +157,130 @@ class SRtools(VisiumData):
 
 class Xfuse(SRtools):
 
+    def write_in_xfuse_format(
+            counts: pd.DataFrame,
+            image: np.ndarray,
+            label: np.ndarray,
+            annotation: Dict[str, Tuple[np.ndarray, Dict[int, str]]],
+            type_label: str,
+            path: str = "data.h5",
+        ):
+        '''
+        copy from https://github.com/ludvb/xfuse/blob/master/xfuse/convert/utility.py
+        '''
+        def _normalize(x: np.ndarray, axis=None) -> np.ndarray:
+            import warnings
+            x = x - x.min(axis, keepdims=True)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                x = x / x.max(axis, keepdims=True)
+                x = np.nan_to_num(x)
+            return x
+        
+        image = _normalize(image.astype(np.float32), axis=(0, 1)) * 2 - 1
+        image = 0.9 * image
+
+        with h5py.File(path, "w") as data_file:
+            data = csr_matrix(counts.values.astype(float))
+            data_file.create_dataset(
+                "counts/data", data.data.shape, float, data.data.astype(float)
+            )
+            data_file.create_dataset(
+                "counts/indices",
+                data.indices.shape,
+                data.indices.dtype,
+                data.indices,
+            )
+            data_file.create_dataset(
+                "counts/indptr", data.indptr.shape, data.indptr.dtype, data.indptr
+            )
+            data_file.create_dataset(
+                "counts/columns",
+                counts.columns.shape,
+                h5py.string_dtype(),
+                counts.columns.values,
+            )
+            data_file.create_dataset(
+                "counts/index", counts.index.shape, int, counts.index.astype(int)
+            )
+            data_file.create_dataset("image", image.shape, np.float32, image)
+            data_file.create_dataset("label", label.shape, np.int16, label)
+            data_file.create_group("annotation", track_order=True)
+            for k, (annotation_label, label_names) in annotation.items():
+                data_file.create_dataset(
+                    f"annotation/{k}/label",
+                    annotation_label.shape,
+                    np.uint16,
+                    annotation_label,
+                )
+                data_file.create_dataset(
+                    f"annotation/{k}/names/keys",
+                    len(label_names),
+                    np.int64,
+                    list(label_names.keys()),
+                )
+                data_file.create_dataset(
+                    f"annotation/{k}/names/values",
+                    len(label_names),
+                    h5py.string_dtype(),
+                    list(label_names.values()),
+                )
+            data_file.create_dataset(
+                "type", data=type_label, dtype=h5py.string_dtype()
+            )
+
+    def transfer_image_HD(self, patch_pixel):
+        patch_shape = (patch_pixel, patch_pixel)
+        num_row = self.HDData.profile.row_range
+        num_col = self.HDData.profile.col_range
+        visium_w,visium_h = self.profile.frame
+        Hsilde = max(num_row, int(visium_h/self.HDData.bin_size+1)) + 4
+        Wslide = max(num_col, int(visium_w/self.HDData.bin_size+1)) + 4
+        HDdx = (Hsilde-num_row)//2
+        HDdy = (Wslide-num_col)//2
+        bin_patch_shape = [
+            Hsilde,Wslide,*patch_shape
+            ]
+        if self.HDData.image_channels > 1:
+            bin_patch_shape.append(self.HDData.image_channels)
+        
+        patch_array = np.full(bin_patch_shape, fill_value=255, dtype=np.uint8)
+        patch_array[HDdx:HDdx+num_row,HDdy:HDdy+num_col] = self.HDData.crop_patch(patch_shape=patch_shape)
+        for i,j in get_outside_indices((Hsilde,Wslide), HDdx, HDdy, num_row, num_col):
+            x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
+            corners = get_corner(x,y,self.HDData.bin_size,self.HDData.bin_size)
+            cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
+            patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
+            patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
+        img = reconstruct_image(patch_array)
+        #
+        img = image_resize(img, shape=(Hsilde,Wslide))
+        binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
+        binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*patch_pixel  \
+            + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
+        HDmapper = AffineTransform(binsOnImage, binsOnHD)
+        capture_area = (HDdx, HDdy, num_row, num_col)
+        scaleF = 1/HDmapper.resolution
+        return img, capture_area, HDmapper, scaleF
+
     def convert(self):
-        # save image.png
-        ii.imsave(self.prefix/"image.png", self.image)
-        # save mask.png
-        mask = self.mask > 0
-        mask = np.where(mask, cv2.GC_FGD, cv2.GC_BGD).astype(np.uint8)
-        ii.imsave(self.prefix/"mask.png", mask)
-        # save h5
-        write_10X_h5(self.adata, self.prefix/"filtered_feature_bc_matrix.h5")
-        # copy tissue_positions_list.csv
-        shutil.copy(self.path/"spatial/tissue_positions_list.csv", self.prefix/"tissue_positions_list.csv")
-        # copy scale-factors
-        shutil.copy(self.path/"spatial/scalefactors_json.json", self.prefix/"scalefactors_json.json")
-        # calculate scale 
-        with open(self.prefix/"scale.txt","w") as f:
-            f.write(str(self.pixel_size/self.super_pixel_size))
+        if self.HDData == None:
+            # save image.png
+            ii.imsave(self.prefix/"image.png", self.image)
+            # save mask.png
+            mask = self.mask > 0
+            mask = np.where(mask, cv2.GC_FGD, cv2.GC_BGD).astype(np.uint8)
+            ii.imsave(self.prefix/"mask.png", mask)
+            # save h5
+            write_10X_h5(self.adata, self.prefix/"filtered_feature_bc_matrix.h5")
+            
+            # calculate scale 
+            with open(self.prefix/"scale.txt","w") as f:
+                f.write(str(self.pixel_size/self.super_pixel_size))
+        else:
+            Xfuse.write_in_xfuse_format(
+
+            )
     
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
