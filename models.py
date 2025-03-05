@@ -2,6 +2,7 @@ from pathlib import Path
 import pickle
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime
+from itertools import product
 import shutil
 
 import numpy as np
@@ -158,15 +159,15 @@ class SRtools(VisiumData):
 class Xfuse(SRtools):
 
     def write_in_xfuse_format(
+            path: Path,
             counts: pd.DataFrame,
             image: np.ndarray,
             label: np.ndarray,
-            annotation: Dict[str, Tuple[np.ndarray, Dict[int, str]]],
-            type_label: str,
-            path: str = "data.h5",
+            type_label: Optional[str]="ST",
         ):
         '''
-        copy from https://github.com/ludvb/xfuse/blob/master/xfuse/convert/utility.py
+        copy and edit base on https://github.com/ludvb/xfuse/blob/master/xfuse/convert/utility.py
+        unsupport annotation
         '''
         def _normalize(x: np.ndarray, axis=None) -> np.ndarray:
             import warnings
@@ -181,7 +182,7 @@ class Xfuse(SRtools):
         image = 0.9 * image
 
         with h5py.File(path, "w") as data_file:
-            data = csr_matrix(counts.values.astype(float))
+            data = csr_matrix(counts)
             data_file.create_dataset(
                 "counts/data", data.data.shape, float, data.data.astype(float)
             )
@@ -206,25 +207,6 @@ class Xfuse(SRtools):
             data_file.create_dataset("image", image.shape, np.float32, image)
             data_file.create_dataset("label", label.shape, np.int16, label)
             data_file.create_group("annotation", track_order=True)
-            for k, (annotation_label, label_names) in annotation.items():
-                data_file.create_dataset(
-                    f"annotation/{k}/label",
-                    annotation_label.shape,
-                    np.uint16,
-                    annotation_label,
-                )
-                data_file.create_dataset(
-                    f"annotation/{k}/names/keys",
-                    len(label_names),
-                    np.int64,
-                    list(label_names.keys()),
-                )
-                data_file.create_dataset(
-                    f"annotation/{k}/names/values",
-                    len(label_names),
-                    h5py.string_dtype(),
-                    list(label_names.values()),
-                )
             data_file.create_dataset(
                 "type", data=type_label, dtype=h5py.string_dtype()
             )
@@ -253,8 +235,7 @@ class Xfuse(SRtools):
             patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
         img = reconstruct_image(patch_array)
-        #
-        img = image_resize(img, shape=(Hsilde,Wslide))
+        img = image_resize(img, shape=(Hsilde,Wslide)) # resize to silde shape
         binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
         binsOnHD = self.HDData.profile.tissue_positions[["array_row","array_col"]].values*patch_pixel  \
             + (np.array((HDdx,HDdy))+0.5)*np.array(patch_shape)
@@ -262,9 +243,27 @@ class Xfuse(SRtools):
         capture_area = (HDdx, HDdy, num_row, num_col)
         scaleF = 1/HDmapper.resolution
         return img, capture_area, HDmapper, scaleF
+    
+    def transfer_label_HD(self, image_shape, spot_radius , mapper:AffineTransform) -> np.ndarray:
+        df = self.locDF.copy(True)
+        df.columns = self.profile.RawColumns
+        spotOnImage = mapper.transform_batch(df[["pxl_row_in_fullres","pxl_col_in_fullres"]].values) 
+        label = np.zeros(image_shape)
+        bin_iter = lambda a: range(int(a-spot_radius),int((a+spot_radius)+1.5))
+        d2 = lambda x,y,a,b: (x-a)*(x-a) + (y-b)*(y-b)
+        for spot_id, spot_center in enumerate(spotOnImage, start=1):
+            x,y = spot_center.to_list()
+            for i,j in product(bin_iter(x),bin_iter(y)):
+                bin_x = i+0.5, bin_y = j+0.5
+                if d2(bin_x,bin_y,x,y) <  spot_radius*spot_radius:
+                    if not(i<0 or j<0 or i>=image_shape[1] or j>=image_shape[0]):
+                        continue
+                    label[i,j] = spot_id
+        return label
 
     def convert(self):
         if self.HDData == None:
+            # Image mode use xfuse covert to preprogress
             # save image.png
             ii.imsave(self.prefix/"image.png", self.image)
             # save mask.png
@@ -278,8 +277,18 @@ class Xfuse(SRtools):
             with open(self.prefix/"scale.txt","w") as f:
                 f.write(str(self.pixel_size/self.super_pixel_size))
         else:
+            # Visium HD mode self define preproh
+            patch_pixel_size = int(self.super_pixel_size/self.pixel_size+0.5)
+            img, capture_area, HDmapper, scaleF = self.transfer_image_HD(patch_pixel_size)
+            self.super_image_shape = img.shape[:2]
+            self.capture_area = capture_area
+            radius = self.profile.spot_diameter*scaleF/2
+            label = self.transfer_label_HD(self.super_image_shape, radius, HDmapper)
             Xfuse.write_in_xfuse_format(
-
+                path=self.prefix,
+                counts=self.adata.X,
+                image=img,
+                label=label
             )
     
     def load_output(self, prefix:Path=None):
@@ -434,7 +443,6 @@ class iStar(SRtools):
 
 class soScope(SRtools):
     pass
-
 
 class TESLA(SRtools):
 
