@@ -111,7 +111,7 @@ class Pipeline:
         # run super resolve model
         now = datetime.now()
         format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
-        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size}"
+        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
         self.SRmodel.save_input(Model_dir)
         run_command_in_conda_env(
             CONDA_ENV[self.model_name],
@@ -237,7 +237,7 @@ class Pipeline:
         # run super resolve model
         now = datetime.now()
         format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
-        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size}"
+        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
         self.SRmodel.save_input(Model_dir)
         run_command_in_conda_env(
             CONDA_ENV[self.model_name],
