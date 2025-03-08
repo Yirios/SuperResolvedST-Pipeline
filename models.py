@@ -160,7 +160,7 @@ class Xfuse(SRtools):
 
     def write_in_xfuse_format(
             path: Path,
-            counts: AnnData,
+            counts: pd.DataFrame,
             image: np.ndarray,
             label: np.ndarray,
             type_label: Optional[str]="ST",
@@ -182,7 +182,7 @@ class Xfuse(SRtools):
         image = 0.9 * image
 
         with h5py.File(path, "w") as data_file:
-            data = counts.X
+            data = csr_matrix(counts.values.astype(float))
             data_file.create_dataset(
                 "counts/data", data.data.shape, float, data.data.astype(float)
             )
@@ -197,12 +197,12 @@ class Xfuse(SRtools):
             )
             data_file.create_dataset(
                 "counts/columns",
-                counts.var.index.shape,
+                counts.columns.shape,
                 h5py.string_dtype(),
-                counts.var.index.values,
+                counts.columns.values,
             )
             data_file.create_dataset(
-                "counts/index", counts.obs.index.shape, int, counts.obs.index.astype(int)
+                "counts/index", counts.index.shape, int, counts.index.astype(int)
             )
             data_file.create_dataset("image", image.shape, np.float32, image)
             data_file.create_dataset("label", label.shape, np.int16, label)
@@ -210,6 +210,7 @@ class Xfuse(SRtools):
             data_file.create_dataset(
                 "type", data=type_label, dtype=h5py.string_dtype()
             )
+
 
     def transfer_image_HD(self, patch_pixel):
         patch_shape = (patch_pixel, patch_pixel)
@@ -246,14 +247,28 @@ class Xfuse(SRtools):
         scaleF = 1/HDmapper.resolution
         return img, capture_area, HDmapper, scaleF
     
-    def transfer_label_HD(self, image_shape, spot_radius , mapper:AffineTransform) -> np.ndarray:
+    def transfer_image_mask_HD(self, patch_pixel):
+        mask = 255 - self.mask
+        mask = mask.astype(np.uint8)[..., np.newaxis]
+        self.HDData.image_channels += 1
+        self.HDData.image = np.concatenate([self.HDData.image, mask], axis=2)
+        img, capture_area, HDmapper, scaleF = self.transfer_image_HD(patch_pixel)
+        self.HDData.image_channels -= 1
+        mask = 255 - img[:,:,3]
+        img = img[:,:,:3]
+        self.HDData.image = self.HDData.image[:,:,:3]
+        return img, mask, capture_area, HDmapper, scaleF
+    
+    def transfer_label_HD(self, image_shape, spot_radius , mapper:AffineTransform, mask) -> np.ndarray:
         df = self.locDF.copy(True)
         df.columns = self.profile.RawColumns
+        df = df[df["in_tissue"]==1]
+        print(df.shape)
         spotOnImage = mapper.transform_batch(df[["pxl_row_in_fullres","pxl_col_in_fullres"]].values) 
-        label = np.zeros(image_shape)
+        label = np.where(mask, 0, 1)
         bin_iter = lambda a: range(int(a-spot_radius),int((a+spot_radius)+1.5))
         d2 = lambda x,y,a,b: (x-a)*(x-a) + (y-b)*(y-b)
-        for spot_id, spot_center in enumerate(spotOnImage, start=1):
+        for spot_id, spot_center in enumerate(spotOnImage, start=2):
             spot_x,spot_y = spot_center.tolist()
             for i,j in product(bin_iter(spot_x), bin_iter(spot_y)):
                 bin_x = i+0.5
@@ -261,8 +276,7 @@ class Xfuse(SRtools):
                 if d2(bin_x,bin_y,spot_x,spot_y) < spot_radius*spot_radius:
                     if i<0 or j<0 or i>=image_shape[0] or j>=image_shape[1]:
                         continue
-                    print(i,j,spot_id)
-                    label[i,j] = spot_id
+                    label[i, j] = spot_id
         return label
 
     def convert(self):
@@ -283,17 +297,31 @@ class Xfuse(SRtools):
         else:
             # Visium HD mode self define preprocess
             patch_pixel_size = int(self.super_pixel_size/self.pixel_size+0.5)
-            img, capture_area, HDmapper, scaleF = self.transfer_image_HD(patch_pixel_size)
+            img, mask, capture_area, HDmapper, scaleF = self.transfer_image_mask_HD(patch_pixel_size)
             self.super_image_shape = img.shape[:2]
             self.capture_area = capture_area
             radius = self.scaleF["spot_diameter_fullres"]*scaleF/2
-            label = self.transfer_label_HD(self.super_image_shape, radius, HDmapper)
-            label_image = np.zeros(label.shape, dtype=np.uint8)
-            label_image[label>0]=255
-            ii.imsave("test_xfuse.png", label_image)
+            label = self.transfer_label_HD(self.super_image_shape, radius, HDmapper, mask>0)
+            # label_image = np.zeros(label.shape, dtype=np.uint8)
+            # label_image[label>0]=255
+            # ii.imsave("test_xfuse.png", label_image)
+            counts = self.adata.to_df()
+            counts.index = pd.Index([*range(1, counts.shape[0] + 1)], name="n") + 1
+            counts = pd.concat(
+                [
+                    pd.DataFrame(
+                        [np.repeat(0, counts.shape[1])],
+                        columns=counts.columns,
+                        index=[1],
+                    ).astype(pd.SparseDtype("float", 0)),
+                    counts,
+                ]
+            )
+            print(counts)
+            (self.prefix/"data").mkdir(parents=True, exist_ok=True)
             Xfuse.write_in_xfuse_format(
-                path=self.prefix/"data.h5",
-                counts=self.adata,
+                path=self.prefix/"data/data.h5",
+                counts=counts,
                 image=img,
                 label=label
             )
