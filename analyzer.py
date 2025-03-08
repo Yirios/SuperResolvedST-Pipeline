@@ -113,11 +113,11 @@ class Pipeline:
         format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
         Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
         self.SRmodel.save_input(Model_dir)
-        run_command_in_conda_env(
+        run_time = run_command_in_conda_env(
             CONDA_ENV[self.model_name],
             f'{TOOL_SCRIPTS[self.model_name]} {Model_dir.resolve()}/',
-            f'{Model_dir.resolve()}/{self.model_name}.log'
         )
+        self.SRmodel.update_params(run_time=run_time)
         self.SRmodel.load_output(Model_dir)
         
         # save as VisiumHD
@@ -239,11 +239,11 @@ class Pipeline:
         format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
         Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
         self.SRmodel.save_input(Model_dir)
-        run_command_in_conda_env(
+        run_time = run_command_in_conda_env(
             CONDA_ENV[self.model_name],
             f'{TOOL_SCRIPTS[self.model_name]} {Model_dir.resolve()}/',
-            f'{Model_dir.resolve()}/{self.model_name}.log'
         )
+        self.SRmodel.update_params(run_time=run_time)
         self.SRmodel.load_output(Model_dir)
 
         ####### save ########

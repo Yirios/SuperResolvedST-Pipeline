@@ -34,7 +34,7 @@ def timer(func):
 
 def progress_bar(title, iterable, total):
     sys.stdout.write(title + '\n')
-    step = total // 1000
+    step = max(1, total // 10000)
     def iter_with_bar(): 
         for i, item in enumerate(iterable, 1):
             yield item
@@ -42,7 +42,7 @@ def progress_bar(title, iterable, total):
                 percent = (i / total) * 100
                 bar = '█' * (i * 50 // total)
                 spaces = ' ' * (50 - len(bar))
-                sys.stdout.write(f"\r[{bar}{spaces}] {percent:.1f}%")
+                sys.stdout.write(f"\r[{bar}{spaces}] {percent:.2f}%")
                 sys.stdout.flush()
         sys.stdout.write('\n')
     return iter_with_bar

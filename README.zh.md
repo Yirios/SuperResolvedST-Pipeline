@@ -43,7 +43,7 @@ python analyzer.py Benchmark \
     -o test_Benchmark \
     -f h5ad \
     --super_pixel_size 16 \
-    --rebin False \
+    --no-rebin  \
     --model iStar
 ```
 ### Benchmark

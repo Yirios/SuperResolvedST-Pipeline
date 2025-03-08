@@ -3,7 +3,8 @@ import pickle
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 from itertools import product
-import shutil
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 import numpy as np
 import cv2
@@ -64,7 +65,7 @@ class SRtools(VisiumData):
         super().save(self, self.prefix)
         ii.imsave(self.prefix/"mask.png", self.mask)
 
-    def save_params(self):
+    def save_params(self, **kvargs):
         parameters = {
             "mode": "VisiumHD" if self.HDData else "Image",
             "super_resolution_tool":type(self).__name__,
@@ -77,7 +78,12 @@ class SRtools(VisiumData):
             parameters["capture_area"] = self.capture_area
         else:
             parameters["capture_area"] = [0,0,*self.super_image_shape]
-        write_json(self.prefix/"super_resolution_config.json",parameters)
+        write_json(self.prefix/"super_resolution_config.json", parameters)
+    
+    def update_params(self,**kvargs):
+        parameters = read_json(self.prefix/"super_resolution_config.json")
+        parameters.update(kvargs)
+        write_json(self.prefix/"super_resolution_config.json", parameters)
 
     def load_params(self):
         parameters = read_json(self.prefix/"super_resolution_config.json")
@@ -94,6 +100,10 @@ class SRtools(VisiumData):
             f.write("\n".join(self.adata.var.index.values))
         self.convert()
         self.save_params()
+    
+    def corp_capture_area(self, img):
+        top,left,height,width = self.capture_area
+        return img[top:top+height,left:left+width]
     
     def load_output(self, prefix:Path=None):
         '''
@@ -263,7 +273,6 @@ class Xfuse(SRtools):
         df = self.locDF.copy(True)
         df.columns = self.profile.RawColumns
         df = df[df["in_tissue"]==1]
-        print(df.shape)
         spotOnImage = mapper.transform_batch(df[["pxl_row_in_fullres","pxl_col_in_fullres"]].values) 
         label = np.where(mask, 0, 1)
         bin_iter = lambda a: range(int(a-spot_radius),int((a+spot_radius)+1.5))
@@ -317,7 +326,6 @@ class Xfuse(SRtools):
                     counts,
                 ]
             )
-            print(counts)
             (self.prefix/"data").mkdir(parents=True, exist_ok=True)
             Xfuse.write_in_xfuse_format(
                 path=self.prefix/"data/data.h5",
@@ -325,9 +333,42 @@ class Xfuse(SRtools):
                 image=img,
                 label=label
             )
+
+    def load_output(self, prefix:Path=None):
+        super().load_output(prefix)
+        mask = ii.imread(self.prefix/'mask.png')
+
+        if mask.shape != self.super_image_shape:
+            mask = image_resize(mask, shape=self.super_image_shape)
+        mask = self.corp_capture_area(mask)
+        mask = mask > 127
     
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
+        import torch
+        
+        with h5py.File(self.prefix/"data/data.h5", "r") as f:
+            mask = f["label"][:,:]==1
+        mask = self.corp_capture_area(mask)
+        
+        # select unmasked super pixel 
+        Xs,Ys = np.where(np.logical_not(mask))
+        data = {"x":Xs, "y":Ys}
+        
+        # select genes
+        with open(self.prefix/'gene-names.txt', 'r') as file:
+            genes = [line.rstrip() for line in file]
+        # genes = ["HES4","VWA1","AL645728.1","GABRD"] # test genes
+        gene_iter = progress_bar(
+            title="Reading xfuse output",
+            iterable=genes,
+            total=len(genes)
+        )
+        for gene in gene_iter():
+            cnts = torch.load(self.prefix/f"result/analyses/final/gene_maps/section1/{gene}.pt")
+            cnts = np.mean(cnts, axis=0)
+            data[gene]=[float(f"{x:.8f}") for x in np.round(cnts[Xs, Ys], decimals=8)]
+        self.SRresult = pd.DataFrame(data)
 
 class iStar(SRtools):
     

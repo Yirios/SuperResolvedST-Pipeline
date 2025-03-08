@@ -1,10 +1,10 @@
 global:
   supported_tools:  [
-    "iStar", "xfuse", "ImSpiRE", "TESLA"
+    "iStar", "xfuse", "ImSpiRE" #, "TESLA"
   ]
   conda_env_prefix:
     iStar:  "iStar"
-    xfuse:  "xfuse"
+    xfuse:  "xfuse-cuda11.7"
     ImSpiRE:  "imspire"
     TESLA:  "TESLA"
   temp_dir:

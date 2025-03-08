@@ -14,8 +14,8 @@ sed -i "s|device = 0|device = $device|" ${prefix}config.toml
 
 if [ "$mode" == "VisiumHD" ]; then
     echo "Mode is VisiumHD"
-    # 在这里添加 VisiumHD 模式下的代码
 elif [ "$mode" == "Image" ]; then
+    echo "Mode is Image"
     export scale=$(cat ${prefix}scale.txt)
     xfuse convert visium \
         --image ${prefix}image.png \
@@ -29,7 +29,6 @@ elif [ "$mode" == "Image" ]; then
 else
     echo "Unknown mode: $mode"
 fi
-
 
 xfuse run --save-path ${prefix}result ${prefix}config.toml
 
