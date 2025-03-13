@@ -1,8 +1,3 @@
 ## TESLA
 
-### Install
-
-1. 
-```shell
-conda create -n TESLA python=3.9
-conda activate TESLA
+TESLA 基于 SpaGCN 中描述的欧几里得距离加权计算其前10个最近的 spot 的基因表达实现超分。这里在 TESLA 源代码的基础上进行了矩阵计算优化，以适用于高分分辨率的超分工作。您无须安装完整的 TESLA 依赖，使用本流程的 conda 环境即可。

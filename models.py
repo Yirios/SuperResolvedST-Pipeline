@@ -523,36 +523,113 @@ class soScope(SRtools):
 class TESLA(SRtools):
 
     def transfer_h5ad(self) -> AnnData:
-        # select in tissue
-        df = self.locDF.copy(True)
+        from anndata import concat as ann_concat
+        df = self.locDF.copy()
         df.columns = ["barcode","in_tissue","array_row","array_col","pixel_x","pixel_y"]
-        df = df[df["in_tissue"]==1]
         df.index = df["barcode"]
-        del df["in_tissue"], df["barcode"]
-        # merge to h5d
-        adata = self.adata.copy()
-        adata.obs = df
+        adata = ann_concat(
+            [
+                AnnData(
+                    X=csr_matrix((len(df),0)),
+                    obs=df
+                ),
+                self.adata
+            ],
+            join="inner", 
+            merge="first",
+            axis=1
+        )
         return adata
+    
+    def mask_in_loc(self, patch_array, capture_area):
+        mask = np.mean(patch_array[:,:,:,:,3],axis=(2,3)) < 128
+        margin = np.full_like(mask, False)
+        top,left,height,width = capture_area
+        margin[top:top+height,left:left+width] = True
+        mask = np.logical_and(mask, margin)
+        rows, cols = np.where(mask)
+        rows -= top
+        cols -= left
+        temp_df = pd.DataFrame({'array_row': rows, 'array_col': cols})
+        merged = self.HDData.locDF.merge(temp_df, on=['array_row', 'array_col'], how='inner')
+        self.HDData.locDF.loc[merged.index, 'in_tissue'] = 1
+        return mask
+    
+    def transfer_image_HD(self, patch_pixel):
+        patch_shape = (patch_pixel, patch_pixel)
+        num_row = self.HDData.profile.row_range
+        num_col = self.HDData.profile.col_range
+        
+        patch_array = self.HDData.crop_patch(patch_shape=patch_shape)
+        capture_area = (0, 0, num_row, num_col)
+        # mask in channel 3
+        if patch_array.shape[4] == 4 :
+            self.mask_in_loc(patch_array, capture_area)
+            patch_array = patch_array[:,:,:,:,:3]
+        # cols = ["barcode","array_row","array_col"]
+        # bin_patchs = {
+        #     str(barcode):patch_array[i,j].reshape(-1,3)
+        #     for barcode, i,j in self.HDData.locDF[cols].values
+        # }
+        spot_patchs = self.crop_patch(in_tissue=True)
+        # return bin_patchs, spot_patchs, capture_area
+        return patch_array, spot_patchs, capture_area
+    
+    def transfer_image_mask_HD(self, patch_pixel):
+        mask = 255 - self.mask
+        mask = mask.astype(np.uint8)[..., np.newaxis]
+        self.HDData.image_channels += 1
+        self.HDData.image = np.concatenate([self.HDData.image, mask], axis=2)
+        # bin_patchs, spot_patchs, capture_area = self.transfer_image_HD(patch_pixel)
+        patch_array, spot_patchs, capture_area = self.transfer_image_HD(patch_pixel)
+        self.HDData.image_channels -= 1
+        self.mask = 255 - self.HDData.image[:,:,3]
+        self.HDData.image = self.HDData.image[:,:,:3]
+        # return bin_patchs, spot_patchs, capture_area
+        return patch_array, spot_patchs, capture_area
 
     def convert(self):
-        # save image.jpg
-        ii.imsave(self.prefix/"image.jpg", self.image)
-        # save mask.png
-        mask = self.mask
-        ii.imsave(self.prefix/"mask.png", mask,)
-        # save data.h5ad
-        self.transfer_h5ad().write_h5ad(self.prefix/"data.h5ad")
-        # calculate super pixel step
-        with open(self.prefix/"pixel_step.txt","w") as f:
-            scale = self.scaleF["tissue_hires_scalef"]*4/self.pixel_size
-            f.write(str(int(np.round(1/scale))))
+        if self.HDData == None:
+            # save image.jpg
+            ii.imsave(self.prefix/"image.jpg", self.image)
+            # save mask.png
+            ii.imsave(self.prefix/"mask.png", self.mask)
+            # save data.h5ad
+            self.transfer_h5ad().write_h5ad(self.prefix/"data.h5ad")
+            # calculate super pixel step
+            with open(self.prefix/"pixel_step.txt","w") as f:
+                f.write(str(self.pixel_size/self.super_pixel_size))
+        else:
+            patch_pixel_size = int(self.super_pixel_size/self.pixel_size+0.5)
+            # bin_patchs, spot_patchs, capture_area = self.transfer_image_mask_HD(patch_pixel_size)
+            patch_array, spot_patchs, capture_area = self.transfer_image_mask_HD(patch_pixel_size)
+            # # bin patch images
+            # np.savez_compressed(self.prefix/"bin_image.npz", **bin_patchs)
+            np.save(self.prefix/"bin_image.npy", patch_array)
+            # spot patch images
+            np.savez_compressed(self.prefix/"spot_image.npz", **spot_patchs)
+            # bin positions
+            pd.to_pickle(
+                self.HDData.locDF,
+                self.prefix/"bin_positions.pkl"
+            )
+            self.transfer_h5ad().write_h5ad(self.prefix/"data.h5ad")
+            self.super_image_shape = capture_area[2:]
+            self.capture_area = capture_area
 
     def load_output(self, prefix:Path=None):
         super().load_output(prefix)
         adata = read_h5ad(self.prefix/"enhanced_exp.h5ad")
         self.SRresult = adata.to_df()
-        self.SRresult.insert(0, 'y', adata.obs["y_spuer"].astype(int))
-        self.SRresult.insert(0, 'x', adata.obs["x_spuer"].astype(int))
+
+        top,left,height,width = self.capture_area
+        mask_x = (adata.obs["x_super"] >= top) & (adata.obs["x_super"] < top + height)
+        mask_y = (adata.obs["y_super"] >= left) & (adata.obs["y_super"] < left+ width)
+        mask = np.logical_and(mask_x,mask_y)
+
+        self.SRresult = self.SRresult.loc[mask,:]
+        self.SRresult.insert(0, 'x', adata.obs.loc[mask,"x_super"].astype(int)-top)
+        self.SRresult.insert(0, 'y', adata.obs.loc[mask,"y_super"].astype(int)-left)
 
 class ImSpiRE(SRtools):
     

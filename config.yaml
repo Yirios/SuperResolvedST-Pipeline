@@ -1,12 +1,12 @@
 global:
   supported_tools:  [
-    "iStar", "xfuse", "ImSpiRE" #, "TESLA"
+    "iStar", "xfuse", "ImSpiRE", "TESLA"
   ]
   conda_env_prefix:
     iStar:  "iStar"
     xfuse:  "xfuse-cuda11.7"
     ImSpiRE:  "imspire"
-    TESLA:  "TESLA"
+    TESLA:  "DataReader"
   temp_dir:
     iStar:  "./iStar/temp"
     xfuse:  "./xfuse/temp"
@@ -16,7 +16,7 @@ global:
     iStar:  "./Run-iStar.sh"
     xfuse:  "./Run-xfuse.sh"
     ImSpiRE:  "./Run-ImSpiRE.sh"
-    TESLA:  "python ./Run-TESLA.py"
+    TESLA:  "python /home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipline/Run-TESLA.py --prefix"
 default:
   visium_serial:  1
   format: "h5ad"

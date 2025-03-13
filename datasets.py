@@ -236,6 +236,29 @@ class VisiumData(rawData):
         undrop_barcode = self.locDF.loc[undrop_mask,"barcode"]
         self.adata = self.adata[undrop_barcode,:]
 
+    def crop_patch(self, spot_size=None, in_tissue=True):
+        '''
+        spot_size: diameter of spot (um)
+        '''
+        if not spot_size:
+            spot_size = self.profile.spot_diameter
+        cols = ["barcode","pxl_col_in_fullres","pxl_row_in_fullres"]
+        if in_tissue:
+            spot_centers = self.locDF.loc[self.locDF['in_tissue']==1, cols].values
+        else:
+            spot_centers = self.locDF.loc[:,cols].values
+        if not spot_size: spot_size = self.profile.spot_diameter
+        radius = spot_size/self.pixel_size/2
+        spots = progress_bar(
+            title="Cropping patch image of each spot",
+            iterable=spot_centers,
+            total=len(spot_centers)
+        )
+        spot_patchs = {}
+        for spot_center in spots():
+            spot_patchs[str(spot_center[0])] = crop_single_spot(self.image, spot_center[1:], radius)
+        return spot_patchs
+
     def Visium2HD(self, HDprofile:VisiumHDProfile, **kwargs) -> "VisiumHDData":
 
         _, frame_center =  align_profile(HDprofile, self.profile, **kwargs)

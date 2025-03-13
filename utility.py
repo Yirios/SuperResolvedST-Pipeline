@@ -351,3 +351,43 @@ def reconstruct_image(patch_array):
             reconstructed[x_start:x_end, y_start:y_end] = patch
     
     return reconstructed.squeeze()  # 去除单通道情况下的多余维度
+
+import numpy as np
+
+def crop_single_spot(image: np.ndarray, spot: np.ndarray, radius: float) -> np.ndarray:
+    h, w = image.shape[:2]
+    yc, xc = spot[0], spot[1]
+    # 计算有效区域边界
+    y0 = int(np.floor(yc - radius))
+    y1 = int(np.ceil(yc + radius)) + 1
+    x0 = int(np.floor(xc - radius))
+    x1 = int(np.ceil(xc + radius)) + 1
+    
+    # 边界约束
+    y0 = max(0, y0)
+    y1 = min(h, y1)
+    x0 = max(0, x0)
+    x1 = min(w, x1)
+    
+    # 截取局部区域
+    local_img = image[y0:y1, x0:x1]
+    ly, lx = local_img.shape[:2]
+    if ly == 0 or lx == 0:
+        return np.array([])
+    
+    # 计算局部网格坐标
+    y_centered = np.arange(y0, y1) - yc
+    x_centered = np.arange(x0, x1) - xc
+    yy, xx = np.meshgrid(y_centered, x_centered, indexing='ij')
+    
+    # 生成动态掩模
+    dist_matrix = np.sqrt(yy**2 + xx**2)
+    mask = dist_matrix <= radius
+    
+    # 提取像素
+    if image.ndim == 3:
+        roi = local_img[mask, :]
+    else:
+        roi = local_img[mask]
+    
+    return roi
