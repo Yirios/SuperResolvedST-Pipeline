@@ -46,7 +46,6 @@ def one_barcode(pixels:np.ndarray):
 
 def sum_patch(neighborhoods, index=None, RGB=True):
     if isinstance(neighborhoods, np.ndarray):
-        print(neighborhoods.shape)
         if RGB:
             mean_colors = neighborhoods.mean(axis=(1, 2))
             var = np.var(neighborhoods, axis=(1,2))
@@ -106,7 +105,7 @@ def imputation(
     known_adata.obs["z"]=(known_adata.obs["color"]-np.mean(known_adata.obs["color"]))/np.std(known_adata.obs["color"])*z_scale
     imputation_sudo(sudo, known_adata, num_nbs, k)
 
-def imputation_sudo(sudo, known_adata, num_nbs, k):
+def imputation_sudo(sudo, known_adata, num_nbs, k=None):
     #-----------------------Distance matrix between sudo and known points-------------#
     bin_cord = sudo[["x","y","z"]].values
     spot_cord = known_adata.obs[["x","y","z"]].values
@@ -127,17 +126,19 @@ def imputation_sudo(sudo, known_adata, num_nbs, k):
     mask = distances <= dis_threshold
     valid_mask = mask.any(axis=1)
 
+    adjusted_dist = (distances + 0.1)/np.min(distances + 0.1, axis=1, keepdims=True)
     if isinstance(k, int):
-        adjusted_dist = distances + 0.1
         weights = 1 / (adjusted_dist ** k)
     else:
         weights = np.exp(-distances)
 
-    sum_weights = np.sum(weights * mask, axis=1, keepdims=True)
+    # sum_weights = np.sum(weights * mask, axis=1, keepdims=True)
+    sum_weights = np.sum(weights, axis=1, keepdims=True)
     sum_weights[sum_weights == 0] = 1
-    weights = (weights * mask) / sum_weights
+    # weights = (weights * mask) / sum_weights
+    weights = weights / sum_weights
 
-    weights[~valid_mask, :] = 0
+    # weights[~valid_mask, :] = 0
     if isinstance(known_adata.X, np.ndarray):
         # 处理密集矩阵
         neighbor_data = known_adata.X[indices]

@@ -30,6 +30,7 @@ def main():
 
     with open(prefix/"super_resolution_config.json", "r", encoding="utf-8") as f:
         config =  json.load(f)
+    top,left,height,width = config["capture_area"]
 
     counts = sc.read(prefix/"data.h5ad")
     counts = counts[counts.obs["in_tissue"]==1]
@@ -38,7 +39,7 @@ def main():
     sc.pp.log1p(counts) # impute on log scale
     if issparse(counts.X):
         counts.X=counts.X.toarray()
-
+    
     if config["mode"] == "VisiumHD":
 
         spot_patchs = load_npz(prefix/"spot_image.npz")
@@ -51,8 +52,8 @@ def main():
             ["array_row","array_col","pxl_row_in_fullres","pxl_col_in_fullres"]
         ].copy()
         sudo.columns = ["i","j","x","y"]
-        i_indices = sudo["i"].astype(int).values
-        j_indices = sudo["j"].astype(int).values
+        i_indices = sudo["i"].astype(int).values + top
+        j_indices = sudo["j"].astype(int).values + left
         bin_patchs = bin_patch_array[i_indices, j_indices]
         sudo["color"] = sum_patch(bin_patchs)
         z_scale=np.max([np.std(sudo["x"]), np.std(sudo["y"])])
@@ -67,12 +68,14 @@ def main():
         adata:AnnData = imputation_sudo(
             sudo=sudo,
             known_adata=counts,
-            k=2, num_nbs=10
+            k=2,
+            num_nbs=3
+            # num_nbs=10
         )
-        rows, cols = np.where(mask)
-        adata.obs["x_super"] = rows
-        adata.obs["y_super"] = cols
-        adata.uns["shape"] = list(mask.shape)
+        adata.obs.rename(columns={"i":"x_super","j":"y_super"}, inplace=True)
+        adata.obs["x_super"] += top
+        adata.obs["y_super"] += left
+        adata.uns["shape"] = [height, width]
 
     elif config["mode"] == "Image":
         with open(prefix/"pixel_step.txt","r") as f:

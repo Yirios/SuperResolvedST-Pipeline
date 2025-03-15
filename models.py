@@ -551,8 +551,10 @@ class TESLA(SRtools):
         rows -= top
         cols -= left
         temp_df = pd.DataFrame({'array_row': rows, 'array_col': cols})
-        merged = self.HDData.locDF.merge(temp_df, on=['array_row', 'array_col'], how='inner')
-        self.HDData.locDF.loc[merged.index, 'in_tissue'] = 1
+        merged = self.HDData.locDF.reset_index().merge(
+            temp_df, on=['array_row', 'array_col'], how='inner'
+        )
+        self.HDData.locDF.loc[merged['index'], 'in_tissue'] = 1
         return mask
     
     def transfer_image_HD(self, patch_pixel):
