@@ -8,7 +8,7 @@ benchmark 使用的数据均来自 10X 官网，[metadata](metadata.tsv) 中记�
 ```shell
 # 生成数据下载脚本
 python DataDownload.py
-# 进入数据集目录，如 Human Kidney
+# 进入数据集目录，如 Human Kidney 数据集
 cd Visium_HD_Human_Kidney_FFPE
 bash download.sh
 tar -xzvf Visium_HD_Human_Kidney_FFPE_binned_outputs.tar.gz
