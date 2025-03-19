@@ -444,7 +444,23 @@ class VisiumHDData(rawData):
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
 
         return patch_array
-
+    
+    def generate_tissue_mask_image(self, patch_size=None):
+        if not patch_size:
+            patch_size = self.bin_size+0.5
+        patch_pixel = int(patch_size/self.pixel_size+0.5)
+        bins = self.locDF.loc[self.locDF['in_tissue']==1, ["pxl_row_in_fullres","pxl_col_in_fullres"]].values
+        bins_iter = progress_bar(
+            title="Generating tissue mask",
+            iterable=bins,
+            total=len(bins)
+        )
+        mask_image = np.zeros(self.image.shape[:2], dtype=np.uint8)
+        for x,y in bins_iter():
+            top = int(x-patch_pixel/2)
+            left = int(y-patch_pixel/2)
+            mask_image[top:top+patch_pixel, left:left+patch_pixel]=255
+        return mask_image
 
     def _spot2image(self, profile:VisiumProfile, frame_center:Tuple[float, float]):
         '''\
