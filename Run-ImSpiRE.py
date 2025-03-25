@@ -221,3 +221,4 @@ if __name__ == "__main__":
     imspire_param.BasicParam_OutputName="result"
     imspire_param.BasicParam_Overwriting=True
     imspire_param.BasicParam_Verbose=True
+    run_imspire(imspire_param)
