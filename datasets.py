@@ -205,6 +205,7 @@ class VisiumData(rawData):
             spots = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
         else:
             spots = self.locDF.loc[self.locDF['in_tissue']==1, ["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        spots = np.round(spots).astype(int)
         for pt in spots:
             cv2.circle(image, tuple(pt), radius, color, -1)
         return image
@@ -330,6 +331,7 @@ class VisiumHDData(rawData):
             bins = self.locDF[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
         else:
             bins = self.locDF.loc[self.locDF['in_tissue']==1, ["pxl_col_in_fullres","pxl_row_in_fullres"]].values
+        bins = np.round(bins).astype(int)
         for pt in bins:
             cv2.circle(image, tuple(pt), 5, (0,255,0), -1)
         return image
@@ -440,7 +442,8 @@ class VisiumHDData(rawData):
         for id,(i,j),(x,y,_) in bins():
             corners = get_corner(x, y, patch_size, patch_size)
             cornerOnImage = self.mapper.transform_batch(np.array(corners))
-            patchOnImage = crop_single_patch(self.image, cornerOnImage)
+            image_flips = self.mapper.check_flips()
+            patchOnImage = crop_single_patch(image=self.image, corners=cornerOnImage, flips=image_flips)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
 
         return patch_array

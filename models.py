@@ -243,7 +243,8 @@ class Xfuse(SRtools):
             x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
             corners = get_corner(x,y,self.HDData.bin_size,self.HDData.bin_size)
             cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
-            patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
+            image_flips = self.HDData.mapper.check_flips()
+            patchOnImage = crop_single_patch(image=self.HDData.image, corners=cornerOnImage, flips=image_flips)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
         img = reconstruct_image(patch_array)
         img = image_resize(img, shape=(Hsilde,Wslide)) # resize to silde shape
@@ -420,7 +421,8 @@ class iStar(SRtools):
             x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
             corners = get_corner(x,y,self.HDData.bin_size,self.HDData.bin_size)
             cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
-            patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
+            image_flips = self.HDData.mapper.check_flips()
+            patchOnImage = crop_single_patch(image=self.HDData.image, corners=cornerOnImage, flips=image_flips)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
         img = reconstruct_image(patch_array)
         binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
@@ -656,7 +658,8 @@ class ImSpiRE(SRtools):
             x,y,_ = self.HDData.profile[i-HDdx,j-HDdy]
             corners = get_corner(x,y,self.HDData.bin_size,self.HDData.bin_size)
             cornerOnImage = self.HDData.mapper.transform_batch(np.array(corners))
-            patchOnImage = crop_single_patch(self.HDData.image, cornerOnImage)
+            image_flips = self.HDData.mapper.check_flips()
+            patchOnImage = crop_single_patch(image=self.HDData.image, corners=cornerOnImage, flips=image_flips)
             patch_array[i,j] = image_resize(patchOnImage, shape=patch_shape)
         img = reconstruct_image(patch_array)
         binsOnImage = self.HDData.profile.tissue_positions[["pxl_row_in_fullres","pxl_col_in_fullres"]].values
@@ -667,6 +670,19 @@ class ImSpiRE(SRtools):
         scaleF = 1/HDmapper.resolution
         return img, capture_area, HDmapper, scaleF
     
+
+    def transfer_image_mask_HD(self, patch_pixel):
+        mask = 255 - self.mask
+        mask = mask.astype(np.uint8)[..., np.newaxis]
+        self.HDData.image_channels += 1
+        self.HDData.image = np.concatenate([self.HDData.image, mask], axis=2)
+        img, capture_area, HDmapper, scaleF = self.transfer_image_HD(patch_pixel)
+        self.HDData.image_channels -= 1
+        mask = 255 - img[:,:,3]
+        img = img[:,:,:3]
+        self.HDData.image = self.HDData.image[:,:,:3]
+        return img, mask, capture_area, HDmapper, scaleF
+
     def transfer_loc_HD(self, mapper:AffineTransform) -> pd.DataFrame:
         df = self.locDF.copy(True)
         df.columns = self.profile.RawColumns
@@ -680,8 +696,12 @@ class ImSpiRE(SRtools):
         if self.HDData == None:
             self.save(self.prefix)
             self.super_image_shape = [i//patch_pixel_size for i in self.image.shape[:2]]
+            mask = image_resize(self.mask, shape=self.super_image_shape)
+            np.save(self.prefix/"mask.npy", mask>127)
         else:
-            img, capture_area, HDmapper, scaleF = self.transfer_image_HD(patch_pixel_size)
+            img, mask, capture_area, HDmapper, scaleF = self.transfer_image_mask_HD(patch_pixel_size)
+            mask = image_resize(mask, shape=capture_area[2:])
+            np.save(self.prefix/"mask.npy", mask>127)
             locDF = self.transfer_loc_HD(HDmapper)
             FullImage = np.max(img.shape)
             scaleFs = {

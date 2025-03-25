@@ -107,6 +107,20 @@ class AffineTransform:
         s_y = np.linalg.norm(self.M[:, 1])  # 第2列
         return 1/np.mean((s_x,s_y))
 
+    @property
+    def is_horizontal_flip(self):
+        """判断是否水平翻转"""
+        return self.M[1, 1] < 0
+    
+    @property
+    def is_vertical_flip(self):
+        """判断是否垂直翻转"""
+        return self.M[0, 0] < 0
+
+    def check_flips(self):
+        """返回翻转状态的元组 (水平反转, 垂直反转)"""
+        return self.is_horizontal_flip, self.is_vertical_flip
+    
 def hash_to_dna(index, length=16, suffix="-1"):
     """ 通过哈希值生成 DNA 序列 """
     bases = "ACGT"
@@ -266,7 +280,7 @@ def get_corner(x,y,h,w):
     a = h/2; b = w/2
     return [[x-a,y-b],[x-a,y+b],[x+a,y+b],[x+a,y-b]]
     
-def crop_single_patch(image:np.ndarray, corners):
+def crop_single_patch(image:np.ndarray, corners, flips=(False,False)):
     H, W = image.shape[:2]
     if len(image.shape) == 2:
         image_channels = 1
@@ -303,6 +317,12 @@ def crop_single_patch(image:np.ndarray, corners):
             pad_left:pad_left + patch.shape[1]
         ] = patch
 
+    if flips[0] or flips[1]:
+        axes = []
+        if flips[0]: axes.append(1)
+        if flips[1]: axes.append(0)
+        patch_filled = np.flip(patch_filled, axis=axes)
+    
     return patch_filled
 
 def get_outside_indices(shape, dx, dy, num_row, num_col):
