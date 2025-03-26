@@ -218,7 +218,7 @@ if __name__ == "__main__":
         imspire_param.ImageParam_PatchDist=step
     imspire_param.FeatureParam_ProcessNumber=os.cpu_count()/2
     imspire_param.BasicParam_PlatForm="Visium"
-    imspire_param.BasicParam_OutputName="result"
+    imspire_param.BasicParam_OutputName=prefix/"result"
     imspire_param.BasicParam_Overwriting=True
     imspire_param.BasicParam_Verbose=True
     run_imspire(imspire_param)

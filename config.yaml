@@ -13,10 +13,11 @@ global:
     ImSpiRE:  "./ImSpiRE/temp"
     TESLA:  "./TESLA/temp"
   tool_scripts:
-    iStar:  "./Run-iStar.sh"
-    xfuse:  "./Run-xfuse.sh"
-    ImSpiRE:  "./Run-ImSpiRE.sh"
-    TESLA:  "python /home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipline/Run-TESLA.py --prefix"
+    iStar:  "./iStar/Run-iStar.sh"
+    xfuse:  "./xfuse/Run-xfuse.sh"
+    # ImSpiRE:  "./ImSpiRE/Run-ImSpiRE.sh"
+    ImSpiRE:  "python ./ImSpiRE/Run-ImSpiRE.py --prefix"
+    TESLA:  "python ./TESLA/Run-TESLA.py --prefix"
 default:
   visium_serial:  1
   format: "h5ad"
