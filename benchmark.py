@@ -47,15 +47,6 @@ CONDA_ENV:dict = global_configs.get(
         "TESLA":  "DataReader"
     }
 )
-TEMP_DIR:dict = global_configs.get(
-    "temp_dir",
-    {
-        "iStar":  "./iStar/temp",
-        "xfuse":  "./xfuse/temp",
-        "ImSpiRE":  "./ImSpiRE/temp",
-        "TESLA":  "./TESLA/temp"
-    }
-)
 TOOL_SCRIPTS:dict = global_configs.get(
     "tool_scripts",
     {
@@ -126,7 +117,7 @@ class Benchmark :
         model.set_target_VisiumHD(visiumHD)
 
         # run super resolve model
-        Model_temp = Path(TEMP_DIR[model_name])
+        Model_temp = Path(self.output_path/f"bin_{bin_size:03}um/{model_name}_workspace")
         now = datetime.now()
         format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
         Model_dir = Model_temp/f"{format_time}_{bin_size:03}"
@@ -140,12 +131,46 @@ class Benchmark :
 
         ####### save ########
         model.to_VisiumHD()
-        visiumHD.to_anndata().write_h5ad(self.output_path/f"{model_name}_superHD.h5ad")
+        visiumHD.to_anndata().write_h5ad(Model_temp/"superHD.h5ad")
+
+def rebinning(prefix:Path, source_image_path:Path, output_path:Path, bin_size, n_top_genes=2000, min_counts=10):
+    prefix = Path(prefix)
+    source_image_path = Path(source_image_path)
+    output_path = Path(output_path)
+    visiumHD_profile_small = VisiumHDProfile(bin_size=2)
+    visiumHD_profile_lagel = VisiumHDProfile(bin_size=bin_size)
+
+    HDdata = VisiumHDData()
+    HDdata.load(
+        path = prefix/"square_002um",
+        profile = visiumHD_profile_small,
+        source_image_path = source_image_path
+    )
+    HDdata.select_HVG(n_top_genes=n_top_genes, min_counts=min_counts)
+    if (prefix/f"square_{bin_size:03}um").exists():
+        genes = HDdata.adata.var.index
+        HDrebin = VisiumHDData()
+        HDrebin.load(
+            path = prefix/f"square_{bin_size:03}um",
+            profile = visiumHD_profile_lagel,
+            source_image_path = source_image_path
+        )
+        HDrebin.require_genes(genes=genes)
+    else:
+        HDrebin = HDdata.rebining(visiumHD_profile_lagel)
+    outfile = output_path/f"bin_{bin_size:03}um/rawHD.h5ad"
+    HDrebin.to_anndata().write_h5ad(outfile)
 
 def main():
     metadata = pd.read_csv("benchmark/metadata.tsv", sep="\t")
     for i in range(len(metadata)):
         id = metadata.loc[i,"Sample ID"]
+        rebinning(
+            prefix = f"benchmark/data/{id}/binned_outputs",
+            source_image_path = f"benchmark/data/{id}/{id}_tissue_image.tif",
+            output_path = f"benchmark/data/{id}",
+            bin_size=16
+        )
         benchmarker = Benchmark(
             input_path=f"benchmark/data/{id}/binned_outputs/square_002um",
             output_path=f"benchmark/data/{id}",
@@ -156,13 +181,12 @@ def main():
             n_top_genes=2000,
             min_counts=10
         )
-        for model_name in ["iStar", "ImSpiRE", "TESLA"]:
+        for model_name in ["TESLA", "iStar"]:
             benchmarker.run(
                 model_name=model_name,
                 mask_image_path=f"benchmark/data/{id}/mask.png",
                 bin_size=16
             )
-    
 
 if __name__ == "__main__":
     main()

@@ -9,7 +9,8 @@ import numpy as np
 from scipy.sparse import issparse
 import scanpy as sc
 import cv2
-from TESLA.imputation import imputation, imputation_sudo, sum_patch
+
+from imputation import imputation, imputation_sudo, sum_patch
 from anndata import AnnData
 import pandas as pd
 
