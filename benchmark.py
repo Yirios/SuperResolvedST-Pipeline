@@ -2,6 +2,9 @@ import argparse
 from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
+import os
+import yaml
+import json
 
 import pandas as pd
 import imageio
@@ -12,30 +15,56 @@ from models import SRtools, iStar, ImSpiRE, Xfuse, TESLA
 from run_in_conda import run_command_in_conda_env
 
 
+CONFIG_PATHS = [
+    os.path.join(os.getcwd(), "config.yaml")
+]
+
+def load_config():
+    """从配置文件中加载全局配置，支持 YAML 或 JSON"""
+    for path in CONFIG_PATHS:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                if path.endswith((".yaml", ".yml")):
+                    return yaml.safe_load(f)
+                elif path.endswith(".json"):
+                    return json.load(f)
+    return {}
+
 CONFIG = {
     'n_top_hvg': 2000,
     'min_counts': 10,
     'auto_mask': True
 }
 
-CONDA_ENV = {
-    "iStar":  "iStar",
-    "xfuse":  "xfuse-cuda11.7",
-    "ImSpiRE":  "imspire",
-    "TESLA":  "DataReader",
-}
-TEMP_DIR =  {
-    "iStar":  "./iStar/temp",
-    "xfuse":  "../xfuse/temp",
-    "ImSpiRE":  "./ImSpiRE/temp",
-    "TESLA":  "./TESLA/temp",
-}
-TOOL_SCRIPTS = {
-    "iStar":  "./Run-iStar.sh",
-    "xfuse":  "./Run-xfuse.sh",
-    "ImSpiRE":  "./Run-ImSpiRE.sh",
-    "TESLA":  "./Run-TESLA.py --prefix",
-}
+configs = load_config() or {}
+global_configs:dict = configs.get("global", {})
+CONDA_ENV:dict = global_configs.get(
+    "conda_env_prefix",
+    {
+        "iStar":  "iStar",
+        "xfuse":  "xfuse-cuda11.7",
+        "ImSpiRE":  "imspire",
+        "TESLA":  "DataReader"
+    }
+)
+TEMP_DIR:dict = global_configs.get(
+    "temp_dir",
+    {
+        "iStar":  "./iStar/temp",
+        "xfuse":  "./xfuse/temp",
+        "ImSpiRE":  "./ImSpiRE/temp",
+        "TESLA":  "./TESLA/temp"
+    }
+)
+TOOL_SCRIPTS:dict = global_configs.get(
+    "tool_scripts",
+    {
+        "iStar":  "./iStar/Run-iStar.sh",
+        "xfuse":  "./xfuse/Run-xfuse.sh",
+        "ImSpiRE":  "python ./ImSpiRE/Run-ImSpiRE.py --prefix",
+        "TESLA":  "./TESLA/Run-TESLA.py --prefix"
+    }
+)
 
 class Benchmark :
     def __init__(self, input_path, output_path, source_image_path):

@@ -33,6 +33,9 @@ def load_config():
                     return json.load(f)
     return {}
 
+def view_params(params:dict, indent=4):
+    return "\n"+"\n".join([" "*indent+f"{k}:\t{v}" for k,v in params.items()])
+
 # 先加载全局配置文件，提取默认值（如果配置文件不存在则使用代码预设值）
 configs = load_config() or {}
 defaults = configs.get("default", {})
@@ -224,14 +227,15 @@ class Pipeline:
         ## build mask 
         if preprocess.get("mask_image", False):
             self.SRmodel.tissue_mask(mask_image_path=preprocess["mask_image"])
-        elif preprocess.get("auto_mask", False):
-            mask_image = self.SRmodel.tissue_mask(auto_mask=True)
+        else:
+            mask_image = HDdata.generate_tissue_mask_image()
             import imageio
-            imageio.imwrite(output_path/"auto_mask.png", mask_image)
+            imageio.imwrite(output_path/"mask.png", mask_image)
+            self.SRmodel.tissue_mask(mask=mask_image)
 
         # match and build visiumHD struct
         center = [ i/2 for i in visiumHD_profile_small.frame]
-        visiumHD = self.SRmodel.Visium2HD(HDprofile=visiumHD_profile_large, mode='manual',center=center)
+        visiumHD = self.SRmodel.Visium2HD(HDprofile=visiumHD_profile_large, mode='manual', center=center)
         self.SRmodel.set_target_VisiumHD(visiumHD)
 
         # run super resolve model
@@ -322,7 +326,7 @@ def visium2hd(args):
     print(f"  Super Pixel Size: {args.super_pixel_size}")
     print(f"  Model: {args.model}")
     print(f"  Preprocessing: {preprocess_params}")
-    print(f"  Postprocessing: {postprocess_params}")
+    # print(f"  Postprocessing: {postprocess_params}")
     pipeline = Pipeline(model_name=args.model)
     pipeline.run_Visium2HD(
         input_path=args.input,
@@ -342,7 +346,8 @@ def hd2visium(args):
     print(f"  Input Dir: {args.input}")
     print(f"  Output Dir: {args.output}")
     print(f"  Format: {args.format}")
-    print(f"  Preprocessing: {preprocess_params}")
+    print(f"  Preprocessing: {view_params(preprocess_params)}")
+    # print(f"  Postprocessing: {postprocess_params}")
     Pipeline.run_HD2Visium(
         input_path=args.input,
         source_image_path=args.source_image_path,
@@ -362,8 +367,8 @@ def benchmark(args):
     print(f"  Super Pixel Size: {args.super_pixel_size}")
     print(f"  Model: {args.model}")
     print(f"  Rebin: {args.rebin}")
-    print(f"  Preprocessing: {preprocess_params}")
-    print(f"  Postprocessing: {postprocess_params}")
+    print(f"  Preprocessing: {view_params(preprocess_params)}")
+    # print(f"  Postprocessing: {postprocess_params}")
     pipeline = Pipeline(model_name=args.model)
     pipeline.run_Benchmark(
         input_path=args.input,

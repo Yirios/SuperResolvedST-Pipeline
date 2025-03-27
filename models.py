@@ -44,7 +44,7 @@ class SRtools(VisiumData):
     
     def tissue_mask(self, mask:np.ndarray=None, mask_image_path:Path=None, auto_mask=False, **kwargs):
         
-        if mask != None:
+        if isinstance(mask, np.ndarray):
             pass
         elif mask_image_path != None:
             mask = ii.imread(mask_image_path)
