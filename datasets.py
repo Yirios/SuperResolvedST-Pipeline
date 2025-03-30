@@ -38,11 +38,30 @@ class rawData:
             self.metadata:Dict = kwargs["metadata"]
 
     def _read_location(self) -> pd.DataFrame:
+        def detect_header(file_path, n_samples=5):
+            sample = pd.read_csv(file_path, header=None, nrows=n_samples)
+            row0 = sample.iloc[0]
+            if not all(isinstance(val, str) for val in row0):
+                return False
+            for i in range(1, len(sample)):
+                row = sample.iloc[i]
+                for val in row:
+                    try:
+                        float(val)
+                        return True
+                    except ValueError:
+                        continue
+            return False
+
         file = self.path/"spatial/tissue_positions.csv"
         if not file.exists():
             file = self.path/"spatial/tissue_positions_list.csv"
-        self.locDF = pd.read_csv(file,header=None)
-        self.locDF.columns = Profile.RawColumns
+        
+        if detect_header(file):
+            self.locDF = pd.read_csv(file)
+        else:
+            self.locDF = pd.read_csv(file,header=None)
+            self.locDF.columns = Profile.RawColumns
         return self.locDF
 
     def _read_scalefactors(self) -> Dict:
