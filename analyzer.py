@@ -295,7 +295,7 @@ def validate_file(path):
         raise argparse.ArgumentTypeError(f"Error: File '{path}' does not exist")
     return path
 
-def common_args(parser):
+def common_args(parser:argparse.ArgumentParser):
     """Add common arguments for all subcommands."""
     parser.add_argument("-i", "--input", required=True, type=validate_directory,
                         help="Input directory path")
@@ -307,6 +307,7 @@ def common_args(parser):
     parser.add_argument("--source_image_path", required=True, type=validate_file,
                         help="Original microscopic image file")
     parser.add_argument("--visium_serial", choices=[1, 4, 5],
+                        type=int,
                         default=DEFAULT_VISIUM_SERIAL,
                         help="10X Visium slide serial number \
                             https://www.10xgenomics.com/support/software/space-ranger/latest/analysis/inputs/image-slide-parameters#slide-serial-numbers")
