@@ -216,7 +216,7 @@ if __name__ == "__main__":
         step = int(f.read().strip())
         imspire_param.ImageParam_CropSize=step
         imspire_param.ImageParam_PatchDist=step
-    imspire_param.FeatureParam_ProcessNumber=os.cpu_count()/2
+    imspire_param.FeatureParam_ProcessNumber=int(os.cpu_count()/2)
     imspire_param.BasicParam_PlatForm="Visium"
     imspire_param.BasicParam_OutputName=prefix/"result"
     imspire_param.BasicParam_Overwriting=True
