@@ -18,41 +18,40 @@ import os
 import yaml
 import json
 
-CONFIG_PATHS = [
-    os.path.join(os.getcwd(), "config.yaml")
-]
-OUTPUT_FORMAT = ["raw", "h5ad"]
+DEFAULT_CONFIG_FILE = os.path.join(os.getcwd(), "config.yaml")
+SUPPORTED_OUTPUT_FORMATS = ["raw", "h5ad"]
 
-def load_config():
+def load_config(config_file):
     """从配置文件中加载全局配置，支持 YAML 或 JSON"""
-    for path in CONFIG_PATHS:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                if path.endswith((".yaml", ".yml")):
-                    return yaml.safe_load(f)
-                elif path.endswith(".json"):
-                    return json.load(f)
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            if config_file.endswith((".yaml", ".yml")):
+                return yaml.safe_load(f)
+            elif config_file.endswith(".json"):
+                return json.load(f)
     return {}
 
 def view_params(params:dict, indent=4):
     return "\n"+"\n".join([" "*indent+f"{k}:\t{v}" for k,v in params.items()])
 
 # 先加载全局配置文件，提取默认值（如果配置文件不存在则使用代码预设值）
-configs = load_config() or {}
-defaults = configs.get("default", {})
-global_configs = configs.get("global", {})
-SUPPORTED_TOOLS = global_configs.get("supported_tools", [])
-CONDA_ENV = global_configs.get("conda_env_prefix", {})
-TEMP_DIR = global_configs.get("temp_dir", {})
-TOOL_SCRIPTS = global_configs.get("tool_scripts", {})
+configs = load_config(DEFAULT_CONFIG_FILE)
 
-# 根据配置文件设置各参数的默认值
-DEFAULT_FORMAT = defaults.get("format", "h5ad")
-DEFAULT_MODEL = defaults.get("model", "iStar")
-DEFAULT_PREPROCESS = defaults.get("preprocess", {'n_top_hvg': 2000, 'min_counts': 10, 'auto_mask': True})
-DEFAULT_POSTPROCESS = defaults.get("postprocess", {"normalize": False})
-DEFAULT_SUPER_PIXEL_SIZE = defaults.get("super_pixel_size", 16)
-DEFAULT_VISIUM_SERIAL = defaults.get("visium_serial", 1)
+def global_reset(configs):
+    global defaults, global_configs, SUPPORTED_TOOLS
+    defaults = configs.get("default", {})
+    global_configs = configs.get("global", {})
+    SUPPORTED_TOOLS = global_configs.get("supported_tools", [])
+
+    global DEFAULT_FORMAT, DEFAULT_MODEL, DEFAULT_PREPROCESS, DEFAULT_POSTPROCESS, DEFAULT_SUPER_PIXEL_SIZE, DEFAULT_VISIUM_SERIAL
+    DEFAULT_FORMAT = defaults.get("format", "h5ad")
+    DEFAULT_MODEL = defaults.get("model", "iStar")
+    DEFAULT_PREPROCESS = defaults.get("preprocess", {'n_top_hvg': 2000, 'min_counts': 10, 'auto_mask': True})
+    DEFAULT_POSTPROCESS = defaults.get("postprocess", {"normalize": False})
+    DEFAULT_SUPER_PIXEL_SIZE = defaults.get("super_pixel_size", 16)
+    DEFAULT_VISIUM_SERIAL = defaults.get("visium_serial", 1)
+
+global_reset(configs)
 
 class Pipeline:
     def __init__(self, model_name):
@@ -68,8 +67,27 @@ class Pipeline:
             self.SRmodel = TESLA()
         else:
             raise ValueError("Unsupported model")
+        Model_config:dict = global_configs.get(model_name, {})
+        if len(Model_config)==0:
+            raise ValueError(f"Check {model_name} global setting in config file")
+
+        self.Model_temp = Path(Model_config.get("temp_dir",f"/tmp/SRST_Pipeline_{model_name}"))
+
+        self.Model_env = Path(Model_config.get("conda_env_prefix", None))
+        if not isinstance(self.Model_env, Path):
+            raise ValueError(f"Check {model_name} conda_env_prefix setting in config file")
         
-        self.Model_temp = Path(TEMP_DIR.get(model_name,f"/tmp/SRST_Pipeline_{model_name}"))
+        self.Model_script = Path(Model_config.get("tool_script", None))
+        if not isinstance(self.Model_script, Path):
+            raise ValueError(f"Check {model_name} tool_script setting in config file")
+        
+        self.Model_params:dict = Model_config.get("model_params", {})
+    
+    def __get_commend(self, prefix:Path):
+        params = " ".join(
+            f"--{k} {v}" for k,v in self.Model_params.items()
+        )
+        return str(self.Model_script) + " " + params + " " + str(prefix.resolve())
 
     def run_Visium2HD(self,
                       input_path, source_image_path, output_path,
@@ -118,8 +136,7 @@ class Pipeline:
         Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
         self.SRmodel.save_input(Model_dir)
         run_time = run_command_in_conda_env(
-            CONDA_ENV[self.model_name],
-            f'{TOOL_SCRIPTS[self.model_name]} {Model_dir.resolve()}/',
+            self.Model_env, self.__get_commend(Model_dir)
         )
         self.SRmodel.update_params(run_time=run_time)
         self.SRmodel.load_output(Model_dir)
@@ -245,8 +262,7 @@ class Pipeline:
         Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
         self.SRmodel.save_input(Model_dir)
         run_time = run_command_in_conda_env(
-            CONDA_ENV[self.model_name],
-            f'{TOOL_SCRIPTS[self.model_name]} {Model_dir.resolve()}/',
+            self.Model_env, self.__get_commend(Model_dir)
         )
         self.SRmodel.update_params(run_time=run_time)
         self.SRmodel.load_output(Model_dir)
@@ -301,11 +317,14 @@ def common_args(parser:argparse.ArgumentParser):
                         help="Input directory path")
     parser.add_argument("-o", "--output", required=True, type=ensure_directory,
                         help="Output directory path")
-    parser.add_argument("-f", "--format", choices=OUTPUT_FORMAT,
+    parser.add_argument("-f", "--format", choices=SUPPORTED_OUTPUT_FORMATS,
                         default=DEFAULT_FORMAT,
                         help="Output format")
     parser.add_argument("--source_image_path", required=True, type=validate_file,
                         help="Original microscopic image file")
+    parser.add_argument("--config", type=validate_file,
+                        default=DEFAULT_CONFIG_FILE,
+                        help="The config file of this pipeline, will replace all setting")
     parser.add_argument("--visium_serial", choices=[1, 4, 5],
                         type=int,
                         default=DEFAULT_VISIUM_SERIAL,
@@ -313,14 +332,14 @@ def common_args(parser:argparse.ArgumentParser):
                             https://www.10xgenomics.com/support/software/space-ranger/latest/analysis/inputs/image-slide-parameters#slide-serial-numbers")
     parser.add_argument("--preprocess", nargs="*", 
                         default=[],
-                        help=f"Preprocessing parameters (default: {DEFAULT_PREPROCESS}, format: key=value)")
-    parser.add_argument("--postprocess", nargs="*", 
-                        default=[],
-                        help=f"Postprocessing parameters (default: {DEFAULT_POSTPROCESS}, format: key=value)")
+                        help=f"Preprocessing parameters, format: key=value (default: {DEFAULT_PREPROCESS})")
+    # parser.add_argument("--postprocess", nargs="*", 
+    #                     default=[],
+    #                     help=f"Postprocessing parameters, format: key=value (default: {DEFAULT_POSTPROCESS})")
 
 def visium2hd(args):
     preprocess_params = parse_key_value_pairs(args.preprocess, DEFAULT_PREPROCESS)
-    postprocess_params = parse_key_value_pairs(args.postprocess, DEFAULT_POSTPROCESS)
+    # postprocess_params = parse_key_value_pairs(args.postprocess, DEFAULT_POSTPROCESS)
     print("Running Visium2HD")
     print(f"  Input Dir: {args.input}")
     print(f"  Output Dir: {args.output}")
@@ -338,12 +357,12 @@ def visium2hd(args):
         format=args.format,
         slide_serial=args.visium_serial,
         preprocess=preprocess_params,
-        postprocess=postprocess_params
+        # postprocess=postprocess_params
     )
     
 def hd2visium(args):
     preprocess_params = parse_key_value_pairs(args.preprocess, DEFAULT_PREPROCESS)
-    postprocess_params = parse_key_value_pairs(args.postprocess, DEFAULT_POSTPROCESS)
+    # postprocess_params = parse_key_value_pairs(args.postprocess, DEFAULT_POSTPROCESS)
     print("Running HD2Visium")
     print(f"  Input Dir: {args.input}")
     print(f"  Output Dir: {args.output}")
@@ -362,7 +381,7 @@ def hd2visium(args):
 
 def benchmark(args):
     preprocess_params = parse_key_value_pairs(args.preprocess, DEFAULT_PREPROCESS)
-    postprocess_params = parse_key_value_pairs(args.postprocess, DEFAULT_POSTPROCESS)
+    # postprocess_params = parse_key_value_pairs(args.postprocess, DEFAULT_POSTPROCESS)
     print("Running Benchmark")
     print(f"  Input Dir: {args.input}")
     print(f"  Output Dir: {args.output}")
@@ -382,10 +401,20 @@ def benchmark(args):
         rebin=args.rebin,
         slide_serial=args.visium_serial,
         preprocess=preprocess_params,
-        postprocess=postprocess_params
+        # postprocess=postprocess_params
     )
 
 def parse_args():
+    #### read user define config file
+    initial_parser = argparse.ArgumentParser(add_help=False)
+    initial_parser.add_argument("--config", type=validate_file, default=None)
+    initial_args, _ = initial_parser.parse_known_args()
+
+    if isinstance(initial_args.config, str):
+        user_configs = load_config(initial_args.config)
+        global_reset(user_configs)
+    
+    #### 
     parser = argparse.ArgumentParser(
         description="This Pipeline is designed to integrate multiple super-resolution tools into spatial transcriptomics (ST) data analysis.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter

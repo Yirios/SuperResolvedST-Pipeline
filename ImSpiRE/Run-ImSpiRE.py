@@ -212,13 +212,14 @@ if __name__ == "__main__":
     imspire_param.BasicParam_InputCountFile="filtered_feature_bc_matrix.h5"
     imspire_param.BasicParam_InputDir=prefix
     imspire_param.BasicParam_InputImageFile=prefix/"image.tif"
+    imspire_param.BasicParam_PlatForm="Visium"
+    imspire_param.BasicParam_OutputDir=prefix
+    imspire_param.BasicParam_OutputName="result"
     with open(prefix/"patch_size.txt", "r") as f:
         step = int(f.read().strip())
         imspire_param.ImageParam_CropSize=step
         imspire_param.ImageParam_PatchDist=step
     imspire_param.FeatureParam_ProcessNumber=int(os.cpu_count()/2)
-    imspire_param.BasicParam_PlatForm="Visium"
-    imspire_param.BasicParam_OutputName=prefix/"result"
     imspire_param.BasicParam_Overwriting=True
     imspire_param.BasicParam_Verbose=True
     run_imspire(imspire_param)

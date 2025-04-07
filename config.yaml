@@ -2,22 +2,35 @@ global:
   supported_tools:  [
     "iStar", "xfuse", "ImSpiRE", "TESLA"
   ]
-  conda_env_prefix:
-    iStar:  "iStar"
-    xfuse:  "xfuse-cuda11.7"
-    ImSpiRE:  "imspire"
-    TESLA:  "DataReader"
-  temp_dir:
-    iStar:  "./iStar/temp"
-    xfuse:  "./xfuse/temp"
-    ImSpiRE:  "./ImSpiRE/temp"
-    TESLA:  "./TESLA/temp"
-  tool_scripts:
-    iStar:  "./iStar/Run-iStar.sh"
-    xfuse:  "./xfuse/Run-xfuse.sh"
-    # ImSpiRE:  "./ImSpiRE/Run-ImSpiRE.sh"
-    ImSpiRE:  "python ./ImSpiRE/Run-ImSpiRE.py --prefix"
-    TESLA:  "python ./TESLA/Run-TESLA.py --prefix"
+  iStar:
+    conda_env_prefix: "iStar"
+    temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/iStar/temp"
+    tool_script: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/iStar/Run-iStar.sh"
+    model_params:
+      iStar_home: "/home/yiriso/Research/Super-resolvedST/istar/istar-master/"
+      epochs: 400
+      device: "cuda"
+      num_jobs: 2
+      num_states: 5
+  xfuse:
+    conda_env_prefix: "xfuse-cuda11.7"
+    temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/xfuse/temp"
+    tool_script: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/xfuse/Run-xfuse.sh"
+    model_params:
+      GPU_id: 0
+      batch_size: 3
+      epochs: 200000
+      learning_rate: 0.0003
+  ImSpiRE:
+    conda_env_prefix: "imspire"
+    temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/ImSpiRE/temp"
+    tool_script: "python /home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/ImSpiRE/Run-ImSpiRE.py"
+    model_params:
+      ProcessNumber: 12
+  TESLA:
+    conda_env_prefix: "DataReader"
+    temp_dir: "./TESLA/temp"
+    tool_script: "python /home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/TESLA/Run-TESLA.py"
 default:
   visium_serial:  1
   format: "h5ad"
