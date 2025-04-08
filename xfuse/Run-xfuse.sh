@@ -20,7 +20,7 @@ function show_help() {
     echo "      --epochs 200000 \\"
     echo "      --batch_size 3 \\"
     echo "      --learning_rate 0.00003 \\"
-    echo "      --patch_size 7086 \\"
+    # echo "      --patch_size 768 \\"
     echo "      --GPU_id 0 \\"
     echo "      --clean \\"
     echo "      /path/to/workspace"
@@ -28,12 +28,12 @@ function show_help() {
 }
 
 config_file="$(dirname $(readlink -f "$0"))/my-config.toml"
+patch_size=768
 # Default parameters
 device=0
 batch_size=3
 epochs=200000
 learning_rate=0.0003
-patch_size=768
 
 # Parse command line arguments
 params=$(getopt \
@@ -94,6 +94,7 @@ if [ "$mode" == "VisiumHD" ]; then
     echo "Mode is VisiumHD"
 elif [ "$mode" == "Image" ]; then
     echo "Mode is Image"
+    echo "Starting xfuse build-in convert..."
     export scale=$(cat ${prefix}scale.txt)
     xfuse convert visium \
         --image ${prefix}/image.png \
@@ -108,5 +109,14 @@ else
     echo "Unknown mode: $mode"
 fi
 
+echo "Running xfuse model..."
 xfuse run --save-path ${prefix}/result ${prefix}/config.toml
 
+# Clean intermediate files if requested
+if $clean; then
+    echo "Cleaning intermediate files..."
+    rm -rf "${prefix}/result/stats"
+    rm -rf "${prefix}/result/checkpoints"
+fi
+
+echo "Processing completed successfully!"

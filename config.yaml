@@ -19,7 +19,7 @@ global:
     model_params:
       GPU_id: 0
       batch_size: 3
-      epochs: 200000
+      epochs: 100000
       learning_rate: 0.0003
   ImSpiRE:
     conda_env_prefix: "imspire"

@@ -95,7 +95,7 @@ cd "${iStar_home}" || { echo "Error: Cannot cd to directory ${iStar_home}"; exit
 echo "Starting image feature extraction..."
 python extract_features.py "${prefix}/" --device="${device}"
 
-echo "Running imputation model..."
+echo "Running iStar imputation module..."
 python impute.py "${prefix}/" \
     --epochs="${epochs}" \
     --device="${device}" \
