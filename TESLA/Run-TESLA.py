@@ -39,7 +39,7 @@ $ python %(prog)s \\
                         default=2,
                         help="Exponential coefficient for distance decay (default: %(default)s)")
     parser.add_argument('-c', '--clean',
-                        dest="clean", action="store_false",
+                        dest="clean", action="store_true",
                         help="Clean intermediate files after processing")
     parser.add_argument('workspace',
                         metavar="/FULL/PATH/TO/WORKSPACE",

@@ -26,7 +26,11 @@ global:
     temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/ImSpiRE/temp"
     tool_script: "python /home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/ImSpiRE/Run-ImSpiRE.py"
     model_params:
-      ProcessNumber: 12
+      Mode: 1
+      FeatureParam_ProcessNumber: 12
+      OptimalTransportParam_NumNeighbors: 5
+      OptimalTransportParam_Epsilon: 0.001
+      OptimalTransportParam_NumIterMax: 50
   TESLA:
     conda_env_prefix: "DataReader"
     temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/TESLA/temp"
