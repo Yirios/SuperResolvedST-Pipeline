@@ -2,6 +2,9 @@ global:
   supported_tools:  [
     "iStar", "xfuse", "ImSpiRE", "TESLA"
   ]
+  supported_output_formats: [
+    "raw", "h5ad"
+  ]
   iStar:
     conda_env_prefix: "iStar"
     temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/iStar/temp"
@@ -45,10 +48,10 @@ default:
   super_pixel_size: 16
   model: "iStar"
   preprocess:
-    n_top_hvg: 2000
+    n_top_hvg: 2000     # -1 will take all of gene
     min_counts: 10
     auto_mask: True
-    mask_image: False
+    mask_image_path: False
     require_genes: False
   postprocess:
     normalize: False

@@ -5,21 +5,20 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
 
-from anndata import AnnData
-
 from datasets import rawData, VisiumData, VisiumHDData
 from profiles import Profile, VisiumProfile, VisiumHDProfile
-from models import iStar, ImSpiRE, Xfuse, TESLA
+from models import SRtools, iStar, ImSpiRE, Xfuse, TESLA
 from run_in_conda import run_command_in_conda_env
 
+import imageio.v2 as ii
 
 import argparse
 import os
 import yaml
 import json
+from warnings import warn
 
 DEFAULT_CONFIG_FILE = os.path.join(os.getcwd(), "config.yaml")
-SUPPORTED_OUTPUT_FORMATS = ["raw", "h5ad"]
 
 def load_config(config_file):
     """从配置文件中加载全局配置，支持 YAML 或 JSON"""
@@ -37,24 +36,25 @@ def view_params(params:dict, indent=4):
 # 先加载全局配置文件，提取默认值（如果配置文件不存在则使用代码预设值）
 configs = load_config(DEFAULT_CONFIG_FILE)
 
-def global_reset(configs):
-    global defaults, global_configs, SUPPORTED_TOOLS
+def global_reset(configs:dict):
+    global defaults, global_configs, SUPPORTED_TOOLS, SUPPORTED_OUTPUT_FORMATS
     defaults = configs.get("default", {})
     global_configs = configs.get("global", {})
     SUPPORTED_TOOLS = global_configs.get("supported_tools", [])
+    SUPPORTED_OUTPUT_FORMATS = global_configs.get("supported_output_formats", [])
 
     global DEFAULT_FORMAT, DEFAULT_MODEL, DEFAULT_PREPROCESS, DEFAULT_POSTPROCESS, DEFAULT_SUPER_PIXEL_SIZE, DEFAULT_VISIUM_SERIAL
     DEFAULT_FORMAT = defaults.get("format", "h5ad")
     DEFAULT_MODEL = defaults.get("model", "iStar")
-    DEFAULT_PREPROCESS = defaults.get("preprocess", {'n_top_hvg': 2000, 'min_counts': 10, 'auto_mask': True})
-    DEFAULT_POSTPROCESS = defaults.get("postprocess", {"normalize": False})
+    DEFAULT_PREPROCESS = defaults.get("preprocess", {'n_top_hvg': -1, 'min_counts': 10, 'auto_mask': True})
+    # DEFAULT_POSTPROCESS = defaults.get("postprocess", {"normalize": False})
     DEFAULT_SUPER_PIXEL_SIZE = defaults.get("super_pixel_size", 16)
     DEFAULT_VISIUM_SERIAL = defaults.get("visium_serial", 1)
 
 global_reset(configs)
 
 class Pipeline:
-    def __init__(self, model_name):
+    def __init__(self, model_name:str, model_config:dict):
         self.model_name = model_name
 
         if model_name == 'iStar':
@@ -67,34 +67,87 @@ class Pipeline:
             self.SRmodel = TESLA()
         else:
             raise ValueError("Unsupported model")
-        Model_config:dict = global_configs.get(model_name, {})
-        if len(Model_config)==0:
+        
+        if len(model_config)==0:
             raise ValueError(f"Check {model_name} global setting in config file")
 
-        self.Model_temp = Path(Model_config.get("temp_dir",f"/tmp/SRST_Pipeline_{model_name}"))
+        self.Model_temp = Path(model_config.get("temp_dir",f"/tmp/SRST_Pipeline_{model_name}"))
 
-        self.Model_env = Path(Model_config.get("conda_env_prefix", None))
+        self.Model_env = Path(model_config.get("conda_env_prefix", None))
         if not isinstance(self.Model_env, Path):
             raise ValueError(f"Check {model_name} conda_env_prefix setting in config file")
         
-        self.Model_script = Path(Model_config.get("tool_script", None))
+        self.Model_script = Path(model_config.get("tool_script", None))
         if not isinstance(self.Model_script, Path):
             raise ValueError(f"Check {model_name} tool_script setting in config file")
         
-        self.Model_params:dict = Model_config.get("model_params", {})
+        self.Model_params:dict = model_config.get("model_params", {})
     
     def __get_commend(self, prefix:Path):
         params = " ".join(
             f"--{k} {v}" for k,v in self.Model_params.items()
         )
         return str(self.Model_script) + " " + params + " " + str(prefix.resolve())
+    
+    def running(self, super_pixel_size:int):
+        now = datetime.now()
+        format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
+        self.SRmodel.save_input(Model_dir)
+        run_time = run_command_in_conda_env(
+            self.Model_env, self.__get_commend(Model_dir)
+        )
+        self.SRmodel.update_params(run_time=run_time)
+        self.SRmodel.load_output(Model_dir)
 
+    def preprocessing(dataset:rawData|SRtools, preprocess:dict):
+        # preprocessing
+        
+        ## select gene
+        if preprocess.get("require_genes", False):
+            validate_file(preprocess["require_genes"])
+            with open(preprocess["require_genes"], "r") as f:
+                content = f.read()
+                genes = content.rstrip().split()
+            dataset.require_genes(genes=genes)
+        else:
+            n_top_genes = int(preprocess.get("n_top_hvg", -1))
+            min_counts = int(preprocess.get("min_counts", 0))
+            if n_top_genes > 0 or min_counts > 0:
+                dataset.select_HVG(n_top_genes=n_top_genes, min_counts=min_counts)
+            else:
+                warn("Haven't select genes, running under all the gene.")
+        
+        if isinstance(dataset, SRtools) and not hasattr(dataset, "mask"):
+            ## build mask 
+            if preprocess.get("mask_image_path", False):
+                dataset.tissue_mask(mask_image_path=Path(preprocess["mask_image_path"]))
+            elif preprocess.get("auto_mask", False):
+                dataset.tissue_mask(auto_mask=True)
+            else:
+                warn("Haven't submit tissue mask image, running under unmask.")
+                from numpy import full_like, uint8
+                dataset.tissue_mask(mask=full_like(dataset.image, 255, dtype=uint8))
+        
+        return None
+    
+    def postprocessing(dataset:rawData|SRtools, postprocess:dict):
+        pass
+    
+    def saving(dataset:rawData, format:str, output_path:Path, filename:str="superHD.h5ad"):
+        if format == "raw":
+            dataset.save(output_path)
+        elif format == "h5ad":
+            dataset.to_anndata().write_h5ad(output_path/filename)
+        else:
+            raise ValueError("Unsupported format")
+    
     def run_Visium2HD(self,
                       input_path, source_image_path, output_path,
                       super_pixel_size, format,
                       slide_serial=DEFAULT_VISIUM_SERIAL,
                       preprocess:Dict=DEFAULT_PREPROCESS,
-                      postprocess:Dict=DEFAULT_POSTPROCESS,
+                    #   postprocess:Dict=DEFAULT_POSTPROCESS,
                       ):
         visium_path = Path(input_path)
         output_path = Path(output_path)
@@ -106,24 +159,7 @@ class Pipeline:
             source_image_path=Path(source_image_path)
         )
         
-        # preprocessing
-        ## build mask 
-        if preprocess.get("mask_image", False):
-            self.SRmodel.tissue_mask(mask_image_path=preprocess["mask_image"])
-        elif preprocess.get("auto_mask", False):
-            mask_image = self.SRmodel.tissue_mask(auto_mask=True)
-            import imageio
-            imageio.imwrite(output_path/"auto_mask.png", mask_image)
-        ## select gene
-        if preprocess.get("require_genes", False):
-            validate_file(preprocess["require_genes"])
-            with open(preprocess["require_genes"], "r") as f:
-                content = f.read()
-                genes = content.rstrip().split()
-                print(genes)
-            self.SRmodel.require_genes(genes=genes)
-        elif preprocess.get("n_top_hvg", False):
-            self.SRmodel.select_HVG(n_top_genes=preprocess["n_top_hvg"])
+        Pipeline.preprocessing(self.SRmodel, preprocess)
 
         # match and build visiumHD struct
         HD_profile = VisiumHDProfile(bin_size=super_pixel_size)
@@ -131,26 +167,12 @@ class Pipeline:
         self.SRmodel.set_target_VisiumHD(visiumHD)
 
         # run super resolve model
-        now = datetime.now()
-        format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
-        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
-        self.SRmodel.save_input(Model_dir)
-        run_time = run_command_in_conda_env(
-            self.Model_env, self.__get_commend(Model_dir)
-        )
-        self.SRmodel.update_params(run_time=run_time)
-        self.SRmodel.load_output(Model_dir)
-        
+        self.running(super_pixel_size=super_pixel_size)
+        self.SRmodel.to_VisiumHD(superHD_demo=visiumHD)
+
+        # Pipeline.postprocessing()
         # save as VisiumHD
-        self.SRmodel.to_VisiumHD()
-        if format == "raw":
-            visiumHD.save(output_path)
-        elif format == "csv":
-            self.SRmodel.to_csv(output_path/"superHD.csv")
-        elif format == "h5ad":
-            visiumHD.to_anndata().write_h5ad(output_path/"superHD.h5ad")
-        else :
-            raise ValueError("Unsupported format")
+        Pipeline.saving(visiumHD, format, output_path)
     
     def run_HD2Visium(input_path, source_image_path, output_path,
                       format, bin_size,
@@ -168,36 +190,19 @@ class Pipeline:
             profile=visiumHD_profile,
             source_image_path=source_image_path
         )
+
+        Pipeline.preprocessing(HDdata, preprocess)
         
-        # preprocessing
-        ## select gene
-        if preprocess.get("require_genes", False):
-            validate_file(preprocess["require_genes"])
-            with open(preprocess["require_genes"], "r") as f:
-                content = f.read()
-                genes = content.rstrip().split()
-                print(genes)
-            HDdata.require_genes(genes=genes)
-        elif preprocess.get("n_top_hvg", False):
-            HDdata.select_HVG(n_top_genes=preprocess["n_top_hvg"])
-        
-        # merging bin in spot
         emulate_visium = HDdata.HD2Visium(visium_profile)
 
-        # save as Visium
-        if format == "raw":
-            emulate_visium.save(output_path)
-        elif format == "h5ad":
-            emulate_visium.to_anndata().write_h5ad(output_path/"emulate_visium.h5ad")
-        else :
-            raise ValueError("Unsupported format")
+        Pipeline.saving(emulate_visium, format, output_path)
 
     def run_Benchmark(self,
                       input_path, source_image_path, output_path,
                       super_pixel_size, bin_size, format, rebin,
                       slide_serial=DEFAULT_VISIUM_SERIAL,
                       preprocess:Dict=DEFAULT_PREPROCESS,
-                      postprocess:Dict=DEFAULT_POSTPROCESS,
+                    #   postprocess:Dict=DEFAULT_POSTPROCESS,
                       ):
         visiumHD_path = Path(input_path)
         output_path = Path(output_path)
@@ -207,32 +212,30 @@ class Pipeline:
         visiumHD_profile_large = VisiumHDProfile(bin_size=super_pixel_size)
 
         ####### merge pseudo Visium ########
+
         HDdata = VisiumHDData()
         HDdata.load(
             path=visiumHD_path,
             profile=visiumHD_profile_small,
             source_image_path=source_image_path
         )
-        
-        # select gene
-        if preprocess.get("require_genes", False):
-            validate_file(preprocess["require_genes"])
-            with open(preprocess["require_genes"], "r") as f:
-                content = f.read()
-                genes = content.rstrip().split()
-                print(genes)
-            HDdata.require_genes(genes=genes)
-        elif preprocess.get("n_top_hvg", False):
-            HDdata.select_HVG(n_top_genes=preprocess["n_top_hvg"])
-        
+        Pipeline.preprocessing(HDdata, {
+                'n_top_hvg': -1, 
+                'min_counts': preprocess['min_counts'],
+                "auto_mask": False
+            }
+        )
         # merging bin in spot
         emulate_visium = HDdata.HD2Visium(visium_profile)
         emulate_visium.save(output_path/"Pseudo_Visium")
+        mask_image = HDdata.generate_tissue_mask_image()
+        ii.imwrite(output_path/"mask.png",mask_image)
         del emulate_visium
 
         ####### rebin VisiumHD ########
         if rebin:
             rebinHD= HDdata.rebining(visiumHD_profile_large)
+            Pipeline.saving(rebinHD, format, output_path, filename="rebinHD.h5ad")
 
         ####### super resolving ########
         self.SRmodel.load(
@@ -240,45 +243,26 @@ class Pipeline:
             profile=visium_profile,
             source_image_path=Path(source_image_path)
         )
-        
-        # preprocessing
         ## build mask 
-        if preprocess.get("mask_image", False):
-            self.SRmodel.tissue_mask(mask_image_path=preprocess["mask_image"])
-        else:
-            mask_image = HDdata.generate_tissue_mask_image()
-            import imageio
-            imageio.imwrite(output_path/"mask.png", mask_image)
-            self.SRmodel.tissue_mask(mask=mask_image)
+        self.SRmodel.tissue_mask(mask=mask_image)
+        Pipeline.preprocessing(self.SRmodel, {
+                'n_top_hvg': preprocess['n_top_hvg'], 
+                'min_counts': preprocess['min_counts'],
+                'mask_image_path': output_path/"mask.png"
+            }
+        )
 
         # match and build visiumHD struct
         center = [ i/2 for i in visiumHD_profile_small.frame]
-        visiumHD = self.SRmodel.Visium2HD(HDprofile=visiumHD_profile_large, mode='manual', center=center)
+        visiumHD = self.SRmodel.Visium2HD(HDprofile=visiumHD_profile_large, mode='manual',center=center)
         self.SRmodel.set_target_VisiumHD(visiumHD)
 
         # run super resolve model
-        now = datetime.now()
-        format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
-        Model_dir = self.Model_temp/f"{format_time}_{super_pixel_size:03}"
-        self.SRmodel.save_input(Model_dir)
-        run_time = run_command_in_conda_env(
-            self.Model_env, self.__get_commend(Model_dir)
-        )
-        self.SRmodel.update_params(run_time=run_time)
-        self.SRmodel.load_output(Model_dir)
+        self.running(super_pixel_size=super_pixel_size)
 
         ####### save ########
         self.SRmodel.to_VisiumHD()
-        if format == "raw":
-            visiumHD.save(output_path/"superHD")
-            if rebin:
-                rebinHD.save(output_path/"rebinHD")
-        elif format == "h5ad":
-            visiumHD.to_anndata().write_h5ad(output_path/"superHD.h5ad")
-            if rebin:
-                rebinHD.to_anndata().write_h5ad(output_path/"rebinHD.h5ad")
-        else :
-            raise ValueError("Unsupported format")
+        Pipeline.saving(visiumHD, format, output_path)
 
 def parse_key_value_pairs(pair_list, default_dict):
     """Parse parameters in key=value format and merge them with default values."""
@@ -321,7 +305,7 @@ def common_args(parser:argparse.ArgumentParser):
                         default=DEFAULT_FORMAT,
                         help="Output format")
     parser.add_argument("--source_image_path", required=True, type=validate_file,
-                        help="Original microscopic image file")
+                        help="Original microscopic image file, only supported .tif")
     parser.add_argument("--config", type=validate_file,
                         default=DEFAULT_CONFIG_FILE,
                         help="The config file of this pipeline, will replace all setting")
@@ -346,9 +330,9 @@ def visium2hd(args):
     print(f"  Format: {args.format}")
     print(f"  Super Pixel Size: {args.super_pixel_size}")
     print(f"  Model: {args.model}")
-    print(f"  Preprocessing: {preprocess_params}")
+    print(f"  Preprocessing: {view_params(preprocess_params)}")
     # print(f"  Postprocessing: {postprocess_params}")
-    pipeline = Pipeline(model_name=args.model)
+    pipeline = Pipeline(model_name=args.model, model_config=global_configs.get(args.model, dict()))
     pipeline.run_Visium2HD(
         input_path=args.input,
         source_image_path=args.source_image_path,
@@ -390,7 +374,7 @@ def benchmark(args):
     print(f"  Rebin: {args.rebin}")
     print(f"  Preprocessing: {view_params(preprocess_params)}")
     # print(f"  Postprocessing: {postprocess_params}")
-    pipeline = Pipeline(model_name=args.model)
+    pipeline = Pipeline(model_name=args.model, model_config=global_configs.get(args.model, dict()))
     pipeline.run_Benchmark(
         input_path=args.input,
         source_image_path=args.source_image_path,
@@ -414,7 +398,7 @@ def parse_args():
         user_configs = load_config(initial_args.config)
         global_reset(user_configs)
     
-    #### 
+    #### main argparse
     parser = argparse.ArgumentParser(
         description="This Pipeline is designed to integrate multiple super-resolution tools into spatial transcriptomics (ST) data analysis.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter

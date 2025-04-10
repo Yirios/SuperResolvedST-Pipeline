@@ -59,6 +59,7 @@ def main():
     num_nbs = args.num_nbs
     s = args.color_scale
     
+    print("Running TESLA model...")
     with open(prefix/"super_resolution_config.json", "r", encoding="utf-8") as f:
         config =  json.load(f)
     top,left,height,width = config["capture_area"]
@@ -138,6 +139,7 @@ def main():
     
     adata.X = np.expm1(adata.X)
     adata.write_h5ad(prefix/"enhanced_exp.h5ad")
+    print("Processing completed successfully!")
 
 if __name__ == "__main__":
     main()

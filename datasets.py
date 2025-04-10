@@ -76,7 +76,11 @@ class rawData:
             self.metadata = dict(f.attrs)
 
     def read_image(self, file:Path):
-        self.image = tifffile.imread(file)
+        try:
+            self.source_image_path = Path(file)
+            self.image = tifffile.imread(self.source_image_path)
+        except:
+            raise ValueError("Only support tiff image as input.")
         if len(self.image.shape) == 2:
             self.image_channels = 1
         else:
@@ -96,10 +100,10 @@ class rawData:
         self._read_feature_bc_matrix()
         self._read_scalefactors()
         self._read_location()
-        if source_image_path :
+        if source_image_path is not None:
             self.read_image(Path(source_image_path))
 
-    def to_anndata(self):
+    def to_anndata(self, only_in_tissue=False):
         df = self.locDF.copy()
         df.index = df["barcode"]
         adata = ann_concat(
@@ -114,7 +118,8 @@ class rawData:
             merge="first",
             axis=1
         )
-
+        if not hasattr(self, "image"):
+            raise ValueError("Please read_image first.")
         lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
         hires_image = image_resize(self.image, scalef=self.scaleF["tissue_hires_scalef"])
         adata.uns['spatial'] = {
@@ -124,12 +129,17 @@ class rawData:
                     "lowres":lowres_image/255,
                 },
                 'scalefactors':self.scaleF,
-                'metadata':self.metadata
+                'metadata':self.metadata,
+                'source_image_path': str(self.source_image_path),
             }
         }
         adata.obsm['spatial'] = adata.obs[["pxl_col_in_fullres","pxl_row_in_fullres"]].values
         adata.obs = adata.obs[["in_tissue","array_row","array_col"]]
-        return adata
+
+        if only_in_tissue:
+            return adata[adata.obs["in_tissue"]==1].copy()
+        else:
+            return adata
 
     def _save_location(self,path):
         software_version = self.metadata.get("software_version", "")
@@ -195,9 +205,11 @@ class rawData:
         # add in barcode
         self.profile.tissue_positions['barcode'] = self.locDF['barcode']
 
-    def select_HVG(self,n_top_genes=2000, min_counts=10) -> None:
+    def select_HVG(self, n_top_genes=2000, min_counts=10) -> None:
         self.adata.var_names_make_unique()
         sc.pp.filter_genes(self.adata, min_counts=min_counts)
+        if n_top_genes <= 0 :
+            return None
         sc.pp.highly_variable_genes(self.adata, n_top_genes=n_top_genes, subset=True, flavor='seurat_v3')
 
     def require_genes(self,genes:List[str]) -> None:
@@ -270,7 +282,7 @@ class VisiumData(rawData):
         if not spot_size: spot_size = self.profile.spot_diameter
         radius = spot_size/self.pixel_size/2
         spots = progress_bar(
-            title="Cropping patch image of each spot",
+            title=f"Cropping patch image of {len(spot_centers)} spot",
             iterable=spot_centers,
             total=len(spot_centers)
         )
@@ -315,6 +327,7 @@ class VisiumData(rawData):
                 metadata = metadata
             )
         superHD_demo.image = self.image
+        superHD_demo.source_image_path = self.source_image_path
         superHD_demo.image_channels = self.image_channels
         superHD_demo.pixel_size = self.pixel_size
         superHD_demo.bin_size = HDprofile.bin_size
@@ -368,7 +381,7 @@ class VisiumHDData(rawData):
             1 + self.profile.tissue_positions['new_array_row'] * profile.col_range + self.profile.tissue_positions['new_array_col']
         self.profile.tissue_positions.loc[self.profile.tissue_positions['bin_label']>=len(profile),'bin_label'] = 0
         bin_iter = progress_bar(
-            title="Merge the gene expression from small bins to large bin",
+            title=f"Merge {len(profile)} gene expression from small bins to large bin",
             iterable=range(len(profile)),
             total=len(profile)
         )
@@ -444,7 +457,7 @@ class VisiumHDData(rawData):
             patch_shape = (patch_pixel, patch_pixel)
         
         bins = progress_bar(
-            title="Cropping patch image of each bin",
+            title=f"Cropping patch image of {len(self.profile)} bin",
             iterable=self.profile.bins,
             total=len(self.profile)
         )
@@ -515,7 +528,7 @@ class VisiumHDData(rawData):
         mask_in_tissue = self.locDF["in_tissue"] == 1
 
         spot_iter = progress_bar(
-            title="Merge the gene expression from bins to the spot",
+            title=f"Merge {len(profile)} gene expression from bins to the spot",
             iterable=range(len(profile)),
             total=len(profile)
         )
@@ -570,8 +583,10 @@ class VisiumHDData(rawData):
             scalefactors = scaleF,
             metadata = metadata
         )
-        emulate_visium.match2profile(profile)
         emulate_visium.image = self.image
+        emulate_visium.source_image_path = self.source_image_path
+        emulate_visium.image_channels = self.image_channels
         emulate_visium.pixel_size = self.pixel_size
+        emulate_visium.match2profile(profile)
 
         return emulate_visium
