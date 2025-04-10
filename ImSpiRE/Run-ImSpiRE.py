@@ -17,44 +17,20 @@ def get_args():
     args = parser.parse_args()
     return args
 
-def get_patch_in_tissue(mask, step, scale_row = 1, scale_col = 1):
-    PXL_ROW_MIN=int(min(np.where(mask)[0])/scale_row)
-    PXL_ROW_MAX=int(max(np.where(mask)[0])/scale_row)
+def get_patch_locations(mask, step):
 
-    PXL_COL_MIN=int(min(np.where(mask)[1])/scale_col)
-    PXL_COL_MAX=int(max(np.where(mask)[1])/scale_col)
-
-    row_list = range(PXL_ROW_MIN, PXL_ROW_MAX, step)
-    col_list = range(PXL_COL_MIN, PXL_COL_MAX, step)
-
-    len_row = len(row_list)
-    len_col = len(col_list)
-
-    patch_locations = pd.DataFrame(
-        {"row": np.repeat(range(len_row), len_col, axis=0),
-        "col": list(range(len_col)) * len_row,
-        "pxl_row": np.repeat(row_list, len_col, axis=0),
-        "pxl_col": list(col_list) * len_row,
-        "in_tissue": np.repeat([0], len_row * len_col)})
-
-    for index, row in patch_locations.iterrows():
-        patch_pxl_row = row['pxl_row']
-        patch_pxl_col = row['pxl_col']
-
-        srowpos = int(patch_pxl_row * scale_row)
-        scolpos = int(patch_pxl_col * scale_col)
-
-        height, width = mask.shape[:2]
-        # Determine which patches are located on the tissue
-        if 0 <= srowpos < height and 0 <= scolpos < width:
-            tissue = int(mask[srowpos, scolpos] == 1)
-        else:
-            tissue = 0
-
-        patch_locations['in_tissue'][index] = tissue
-
-    patch_in_tissue = patch_locations.loc[patch_locations["in_tissue"] == 1,]
-    return patch_in_tissue
+    rows, cols = np.indices(mask.shape)
+    
+    pxl_row = np.round((rows + 0.5) * step)
+    pxl_col = np.round((cols + 0.5) * step)
+    
+    return pd.DataFrame({
+        'row': rows.ravel(),
+        'col': cols.ravel(),
+        'pxl_row': pxl_row.ravel(),
+        'pxl_col': pxl_col.ravel(),
+        'in_tissue': mask.ravel().astype(int)
+    })[['row', 'col', 'pxl_row', 'pxl_col', 'in_tissue']]
 
 def run_imspire(imspire_param):
     imspire.create_folder(imspire_param.BasicParam_OutputDir,
@@ -85,10 +61,11 @@ def run_imspire(imspire_param):
 
 
     patch_image_output_path=f"{imspire_param.BasicParam_OutputDir}/{imspire_param.BasicParam_OutputName}/ImageResults/PatchImage"
-    im.generate_patch_locations_2(pos_in_tissue=imdata.pos_in_tissue_filter,
-                                dist=imspire_param.ImageParam_PatchDist)
+    
     mask = np.load(imspire_param.BasicParam_InputDir/"mask.npy")
-    im.segment_patch_image(patch_in_tissue=get_patch_in_tissue(mask, imspire_param.ImageParam_PatchDist), 
+    patch_locations = get_patch_locations(mask, imspire_param.ImageParam_PatchDist)
+    im.patch_in_tissue = patch_locations.loc[patch_locations["in_tissue"] == 1,:]
+    im.segment_patch_image(patch_in_tissue=im.patch_in_tissue, 
                         output_path=patch_image_output_path, 
                         crop_size=imspire_param.ImageParam_CropSize)
 
@@ -205,8 +182,9 @@ def run_imspire(imspire_param):
     np.save(f"{imspire_param.BasicParam_OutputDir}/{imspire_param.BasicParam_OutputName}/SupplementaryResults/ot_T_alpha{imspire_param.OptimalTransportParam_Alpha}_beta{imspire_param.OptimalTransportParam_Beta}_epsilon{imspire_param.OptimalTransportParam_Epsilon}.npy",ot_solver.T)
 
 if __name__ == "__main__":
-    args = get_args()
-    prefix = Path(args.prefix)
+    # args = get_args()
+    # prefix = Path(args.prefix)
+    prefix = Path("/mnt/TenTA-f702/user/zhangyichi/SuperResolvedST-Pipeline/test/ImSpiREHD_DLPFC_064")
 
     imspire_param=imspire.ImSpiRE_Parameters()
     imspire_param.BasicParam_InputCountFile="filtered_feature_bc_matrix.h5"

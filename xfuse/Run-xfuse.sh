@@ -2,10 +2,10 @@
 set -e
 
 function show_help() {
-    echo "Usage: $(basename "$0") [OPTIONS] FULL/PATH/TO/WORKSPACE"
+    echo "Usage: $(basename "$0") [OPTIONS] /FULL/PATH/TO/WORKSPACE"
     echo
     echo "Arguments:"
-    echo "  PATH/TO/WORKSPACE        Required working directory containing input data generated from pipeline"
+    echo "  /FULL/PATH/TO/WORKSPACE        Required working directory containing input data generated from pipeline"
     echo
     echo "Options:"
     echo "  -d, --GPU_id ID          Select GPU device ID (default: 0)"

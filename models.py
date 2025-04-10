@@ -700,8 +700,12 @@ class ImSpiRE(SRtools):
             np.save(self.prefix/"mask.npy", mask>127)
         else:
             img, mask, capture_area, HDmapper, scaleF = self.transfer_image_mask_HD(patch_pixel_size)
-            mask = image_resize(mask, shape=capture_area[2:])
+            self.super_image_shape = [i//patch_pixel_size for i in img.shape[:2]]
+            self.capture_area = capture_area
+
+            mask = image_resize(mask, shape=self.super_image_shape)
             np.save(self.prefix/"mask.npy", mask>127)
+
             locDF = self.transfer_loc_HD(HDmapper)
             FullImage = np.max(img.shape)
             scaleFs = {
@@ -720,8 +724,6 @@ class ImSpiRE(SRtools):
             temp_visium.image = img
             temp_visium.match2profile(VisiumProfile(slide_serial=1), quiet=True)
             temp_visium.save(self.prefix)
-            self.super_image_shape = [i//patch_pixel_size for i in img.shape[:2]]
-            self.capture_area = capture_area
         
         with open(self.prefix/"patch_size.txt","w") as f:
             f.write(str(patch_pixel_size))

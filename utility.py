@@ -212,7 +212,7 @@ def image_resize(img, scalef:float=None, shape=None):
     if shape == None and scalef != None:
         resized_image = cv2.resize(img, None,fx=scalef, fy=scalef, interpolation=cv2.INTER_AREA)
     elif shape != None:
-        resized_image = cv2.resize(img, shape, interpolation=cv2.INTER_AREA)
+        resized_image = cv2.resize(img, shape[::-1], interpolation=cv2.INTER_AREA)
     else:
         raise ValueError("Please input scale factor or target shape")
     return resized_image

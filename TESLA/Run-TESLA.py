@@ -15,10 +15,37 @@ from anndata import AnnData
 import pandas as pd
 
 def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--prefix', type=str)
-    args = parser.parse_args()
-    return args
+    parser = argparse.ArgumentParser(
+        usage="python %(prog)s [OPTIONS] /FULL/PATH/TO/WORKSPACE",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+$ python %(prog)s \\
+    --num_nbs 10 \\
+    --color_scale 1 \\
+    --dist_decay_exp 2 \\
+    /path/to/workspace
+"""
+    )
+    parser.add_argument('-n', '--num_nbs', 
+                        type=int,
+                        default=10,
+                        help="Number of neighboring samples to consider (default: %(default)s)")
+    parser.add_argument('-s', '--color_scale', 
+                        type=float,
+                        default=1.0,
+                        help="Color normalization scale factor (default: %(default)s)")
+    parser.add_argument('-k', '--dist_decay_exp',
+                        type=int,
+                        default=2,
+                        help="Exponential coefficient for distance decay (default: %(default)s)")
+    parser.add_argument('-c', '--clean',
+                        dest="clean", action="store_false",
+                        help="Clean intermediate files after processing")
+    parser.add_argument('workspace',
+                        metavar="/FULL/PATH/TO/WORKSPACE",
+                        type=str,
+                        help="Required working directory containing input data generated from pipeline")
+    return parser.parse_args()
 
 def load_npz(file:Path):
     with np.load(file, allow_pickle=True) as loaded:
@@ -27,8 +54,11 @@ def load_npz(file:Path):
 
 def main():
     args = get_args()
-    prefix = Path(args.prefix)
-
+    prefix = Path(args.workspace)
+    k = args.dist_decay_exp
+    num_nbs = args.num_nbs
+    s = args.color_scale
+    
     with open(prefix/"super_resolution_config.json", "r", encoding="utf-8") as f:
         config =  json.load(f)
     top,left,height,width = config["capture_area"]
@@ -57,7 +87,7 @@ def main():
         j_indices = sudo["j"].astype(int).values + left
         bin_patchs = bin_patch_array[i_indices, j_indices]
         sudo["color"] = sum_patch(bin_patchs)
-        z_scale=np.max([np.std(sudo["x"]), np.std(sudo["y"])])
+        z_scale=np.max([np.std(sudo["x"]), np.std(sudo["y"])])*s
         sudo["z"]=(sudo["color"]-np.mean(sudo["color"]))/np.std(sudo["color"])*z_scale
         counts.obs["color"] = sum_patch(
             neighborhoods=spot_patchs,
@@ -69,9 +99,8 @@ def main():
         adata:AnnData = imputation_sudo(
             sudo=sudo,
             known_adata=counts,
-            k=2,
-            num_nbs=3
-            # num_nbs=10
+            k=k,
+            num_nbs=num_nbs
         )
         adata.obs.rename(columns={"i":"x_super","j":"y_super"}, inplace=True)
         adata.obs["x_super"] += top
@@ -101,7 +130,7 @@ def main():
             genes=counts.var.index.tolist(), 
             shape="None", 
             res=res, 
-            s=1, k=2, num_nbs=10
+            s=s, k=k, num_nbs=num_nbs
         )
         adata.obs["x_super"] = adata.obs["x"]/res
         adata.obs["y_super"] = adata.obs["y"]/res

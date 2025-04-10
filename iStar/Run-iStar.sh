@@ -2,10 +2,10 @@
 set -e
 
 function show_help() {
-    echo "Usage: $(basename "$0") [OPTIONS] FULL/PATH/TO/WORKSPACE/"
+    echo "Usage: $(basename "$0") [OPTIONS] /FULL/PATH/TO/WORKSPACE"
     echo
     echo "Arguments:"
-    echo "  PATH/TO/WORKSPACE/    Required working directory containing input data generated form pipeline"
+    echo "  /FULL/PATH/TO/WORKSPACE    Required working directory containing input data generated form pipeline"
     echo
     echo "Options:"
     echo "  -j, --num_jobs NUM     Number of parallel jobs (default: 2)"
@@ -24,7 +24,7 @@ function show_help() {
     echo "      --device cuda \\"
     echo "      --iStar_home ./istar-master \\"
     echo "      --clean \\"
-    echo "      FULL/PATH/TO/WORKSPACE/"
+    echo "      /path/to/workspace"
     exit 0
 }
 

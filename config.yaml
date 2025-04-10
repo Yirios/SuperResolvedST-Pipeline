@@ -29,8 +29,12 @@ global:
       ProcessNumber: 12
   TESLA:
     conda_env_prefix: "DataReader"
-    temp_dir: "./TESLA/temp"
+    temp_dir: "/home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/TESLA/temp"
     tool_script: "python /home/yiriso/Research/Super-resolvedST/SuperResolvedST-Pipeline/TESLA/Run-TESLA.py"
+    model_params:
+      num_nbs: 3
+      color_scale: 1
+      dist_decay_exp : 2
 default:
   visium_serial:  1
   format: "h5ad"
