@@ -158,7 +158,6 @@ class Pipeline:
             profile=visium_profile,
             source_image_path=Path(source_image_path)
         )
-        print(preprocess)
         Pipeline.preprocessing(self.SRmodel, preprocess)
 
         # match and build visiumHD struct
