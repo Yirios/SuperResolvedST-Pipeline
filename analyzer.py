@@ -18,7 +18,7 @@ import yaml
 import json
 from warnings import warn
 
-DEFAULT_CONFIG_FILE = os.path.join(os.getcwd(), "config.yaml")
+DEFAULT_CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.yaml")
 
 def load_config(config_file):
     """从配置文件中加载全局配置，支持 YAML 或 JSON"""
