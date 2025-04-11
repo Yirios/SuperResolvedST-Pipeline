@@ -117,8 +117,8 @@ class Pipeline:
                 dataset.select_HVG(n_top_genes=n_top_genes, min_counts=min_counts)
             else:
                 warn("Haven't select genes, running under all the gene.")
-        
-        if isinstance(dataset, SRtools) and not hasattr(dataset, "mask"):
+
+        if isinstance(dataset, SRtools) and dataset.mask == None:
             ## build mask 
             if preprocess.get("mask_image_path", False):
                 dataset.tissue_mask(mask_image_path=Path(preprocess["mask_image_path"]))
@@ -158,7 +158,7 @@ class Pipeline:
             profile=visium_profile,
             source_image_path=Path(source_image_path)
         )
-        
+        print(preprocess)
         Pipeline.preprocessing(self.SRmodel, preprocess)
 
         # match and build visiumHD struct
