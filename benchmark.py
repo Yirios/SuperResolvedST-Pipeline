@@ -18,6 +18,7 @@ from analyzer import Pipeline
 from run_in_conda import run_command_in_conda_env
 
 DEFAULT_CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.yaml")
+AVAILABLE_GPU = [0]
 
 def load_config(config_file):
     """从配置文件中加载全局配置，支持 YAML 或 JSON"""
@@ -128,7 +129,7 @@ class Benchmark:
         output_path = dataset_config["output_path"]
         model_config["temp_dir"] = output_path/f"bin_{target_bin_size:03}um/{model_name}_workspace"
         if model_name in ["iStar", "xfuse"]:
-            model_config["model_params"]["GPU_id"] = process_id
+            model_config["model_params"]["GPU_id"] = AVAILABLE_GPU[process_id%len(AVAILABLE_GPU)]
         Visium2HD_pipeline = Pipeline(model_name, model_config)
         Visium2HD_pipeline.SRmodel.load(
             path = output_path/"Pseudo_Visium",
