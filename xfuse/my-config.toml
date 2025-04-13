@@ -1,7 +1,6 @@
 [xfuse]
 network_depth = 6
 network_width = 16
-device =
 gene_regex = ".*"
 min_counts = 0
 
@@ -33,5 +32,3 @@ writer = "tensor"
 data = "section1/data.h5"
 [slides.section1.covariates]
 section = 1
-
-

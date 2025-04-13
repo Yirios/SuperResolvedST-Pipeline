@@ -81,7 +81,7 @@ prefix="$1"
 
 cp ${config_file} ${prefix}/config.toml
 sed -i "/data = \"section1\/data.h5\"/s|data = \"section1/data.h5\"|data = \"${prefix}/data/data.h5\"|" ${prefix}/config.toml
-sed -i "s|device =|device = $device|" ${prefix}/config.toml
+export CUDA_VISIBLE_DEVICES=$device
 sed -i "s|batch_size =|batch_size = $batch_size|" ${prefix}/config.toml
 sed -i "s|epochs =|epochs = $epochs|" ${prefix}/config.toml
 sed -i "s|learning_rate =|learning_rate = $learning_rate|" ${prefix}/config.toml

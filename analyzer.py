@@ -118,7 +118,7 @@ class Pipeline:
             else:
                 warn("Haven't select genes, running under all the gene.")
 
-        if isinstance(dataset, SRtools) and dataset.mask == None:
+        if isinstance(dataset, SRtools) and dataset.mask is None:
             ## build mask 
             if preprocess.get("mask_image_path", False):
                 dataset.tissue_mask(mask_image_path=Path(preprocess["mask_image_path"]))
