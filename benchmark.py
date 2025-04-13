@@ -2,9 +2,11 @@ import argparse
 from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
+from itertools import product
 import os
 import yaml
 import json
+import multiprocessing
 
 import pandas as pd
 import imageio
@@ -12,126 +14,130 @@ import imageio
 from datasets import rawData, VisiumData, VisiumHDData
 from profiles import Profile, VisiumProfile, VisiumHDProfile
 from models import SRtools, iStar, ImSpiRE, Xfuse, TESLA
+from analyzer import Pipeline
 from run_in_conda import run_command_in_conda_env
 
+DEFAULT_CONFIG_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.yaml")
 
-CONFIG_PATHS = [
-    os.path.join(os.getcwd(), "config.yaml")
-]
-
-def load_config():
+def load_config(config_file):
     """从配置文件中加载全局配置，支持 YAML 或 JSON"""
-    for path in CONFIG_PATHS:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                if path.endswith((".yaml", ".yml")):
-                    return yaml.safe_load(f)
-                elif path.endswith(".json"):
-                    return json.load(f)
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            if config_file.endswith((".yaml", ".yml")):
+                return yaml.safe_load(f)
+            elif config_file.endswith(".json"):
+                return json.load(f)
     return {}
 
-CONFIG = {
-    'n_top_hvg': 2000,
-    'min_counts': 10,
-    'auto_mask': True
-}
+configs = load_config(DEFAULT_CONFIG_FILE)
 
-configs = load_config() or {}
-global_configs:dict = configs.get("global", {})
-CONDA_ENV:dict = global_configs.get(
-    "conda_env_prefix",
-    {
-        "iStar":  "iStar",
-        "xfuse":  "xfuse-cuda11.7",
-        "ImSpiRE":  "imspire",
-        "TESLA":  "DataReader"
-    }
-)
-TOOL_SCRIPTS:dict = global_configs.get(
-    "tool_scripts",
-    {
-        "iStar":  "./iStar/Run-iStar.sh",
-        "xfuse":  "./xfuse/Run-xfuse.sh",
-        "ImSpiRE":  "python ./ImSpiRE/Run-ImSpiRE.py --prefix",
-        "TESLA":  "./TESLA/Run-TESLA.py --prefix"
-    }
-)
+def global_reset(configs:dict):
+    global defaults, global_configs, SUPPORTED_TOOLS, SUPPORTED_OUTPUT_FORMATS
+    defaults = configs.get("default", {})
+    global_configs = configs.get("global", {})
+    SUPPORTED_TOOLS = global_configs.get("supported_tools", [])
+    SUPPORTED_OUTPUT_FORMATS = global_configs.get("supported_output_formats", [])
 
-class Benchmark :
-    def __init__(self, input_path, output_path, source_image_path):
-        self.visiumHD_path = Path(input_path)
-        self.output_path = Path(output_path)
-        self.source_image_path = Path(source_image_path)
+    global DEFAULT_FORMAT, DEFAULT_PREPROCESS, DEFAULT_SUPER_PIXEL_SIZE, DEFAULT_VISIUM_SERIAL
+    DEFAULT_FORMAT = defaults.get("format", "h5ad")
+    DEFAULT_PREPROCESS = defaults.get("preprocess", {'n_top_hvg': -1, 'min_counts': 10, 'auto_mask': False})
+    DEFAULT_SUPER_PIXEL_SIZE = defaults.get("super_pixel_size", 8)
+    DEFAULT_VISIUM_SERIAL = defaults.get("visium_serial", 4)
 
-    def preprocess(self, slide_serial=4, n_top_genes=2000, min_counts=10):
+global_reset(configs)
 
-        self.visium_profile = VisiumProfile(slide_serial=slide_serial)
-        self.visiumHD_profile_small = VisiumHDProfile(bin_size=2)
+class Benchmark:
+    def __init__(self, target_bin_size, source_bin_size:int=2, visium_serial:int=4):
+        self.target_bin_size = target_bin_size
+        self.source_bin_size = source_bin_size
+        self.visium_serial = visium_serial
+        self.datasets = {}
+        self.models = {}
+    
+    def set_datasets(self, **kvargs):
+        for dataset_id, dataset_config in kvargs.items():
+            dataset_config["source_profile"] = VisiumHDProfile(bin_size=self.source_bin_size)
+            dataset_config["target_porfile"] = VisiumHDProfile(bin_size=self.target_bin_size)
+            dataset_config["visium_profile"] = VisiumProfile(slide_serial=self.visium_serial)
 
+            dataset_config["input_path"] = Path(dataset_config["input_path"])
+            dataset_config["output_path"] = Path(dataset_config["output_path"])
+            dataset_config["source_image_path"] = Path(dataset_config["source_image_path"])
+            self.datasets[dataset_id] = dataset_config
+
+    def set_models(self, **kvargs):
+        for model_name, model_config in kvargs.items():
+            self.models[model_name] = model_config
+
+    def preprocessHD_single(dataset_config:dict, preprocess_config:dict):
+
+        output_path = dataset_config["output_path"]
+        
         ####### merge pseudo Visium ########
         HDdata = VisiumHDData()
         HDdata.load(
-            path=self.visiumHD_path,
-            profile=self.visiumHD_profile_small,
-            source_image_path=self.source_image_path
+            path = dataset_config["input_path"],
+            profile = dataset_config["source_profile"],
+            source_image_path = dataset_config["source_image_path"]
         )
-        
-        # select gene
-        HDdata.select_HVG(n_top_genes=n_top_genes, min_counts=min_counts)
-        
+        Pipeline.preprocessing(HDdata, {
+                'n_top_hvg': -1, 
+                'min_counts': preprocess_config['min_counts'],
+                "auto_mask": False
+            }
+        )
         # merging bin in spot
-        emulate_visium = HDdata.HD2Visium(self.visium_profile)
-        # emulate_visium.save(self.output_path/"Pseudo_Visium")
-        # mask_image = HDdata.generate_tissue_mask_image()
-        # imageio.imwrite(self.output_path/"mask.png", mask_image)
+        emulate_visium = HDdata.HD2Visium(profile=dataset_config["visium_profile"])
+        emulate_visium.save(output_path/"Pseudo_Visium", save_full_image=False)
+        mask_image = HDdata.generate_tissue_mask_image()
+        imageio.imwrite(output_path/"mask.png", mask_image)
 
-    
-    def run(self, model_name, mask_image_path, bin_size):
-
-        if model_name == 'iStar':
-            model = iStar()
-        elif model_name == 'xfuse':
-            model = Xfuse()
-        elif model_name == 'ImSpiRE':
-            model = ImSpiRE()
-        elif model_name == 'TESLA':
-            model = TESLA()
-        else:
-            ValueError()
+    def preprocessHD(self, preprocess_config:dict, num_works:int):
+        self.preprocess_config = preprocess_config
+        tasks = []
+        for _, dataset_config in self.datasets.items():
+            tasks.append((dataset_config, preprocess_config))
+        with multiprocessing.Pool(processes=num_works) as pool:
+            pool.starmap(Benchmark.preprocessHD_single, tasks)
         
-        self.visiumHD_profile_large = VisiumHDProfile(bin_size=bin_size)
+    def running(self, num_works=1):
 
-        ####### super resolving ########
-        model.load(
-            path=self.output_path/"Pseudo_Visium",
-            profile=self.visium_profile,
-            source_image_path=Path(self.source_image_path)
+        tasks = []
+        for dataset, model in product(self.datasets.items(), self.models.items()):
+            tasks.append((self.target_bin_size, dataset, self.preprocess_config, model))
+        with multiprocessing.Pool(processes=num_works) as pool:
+            pool.starmap(Benchmark.run_single, tasks)
+
+    def run_single(target_bin_size, dataset, preprocess_config, model):
+        model_name, model_config = model
+        dataset_id, dataset_config = dataset
+
+        output_path = dataset_config["output_path"]
+        model_config["temp_dir"] = output_path/f"bin_{target_bin_size:03}um/{model_name}_workspace"
+        Visium2HD_pipeline = Pipeline(model_name, model_config)
+        Visium2HD_pipeline.SRmodel.load(
+            path = output_path/"Pseudo_Visium",
+            profile=dataset_config["visium_profile"],
+            source_image_path=dataset_config["source_image_path"]
         )
-        
-        # preprocessing
-        ## build mask 
-        model.tissue_mask(mask_image_path=mask_image_path)
-        # match and build visiumHD struct
-        center = [ i/2 for i in self.visiumHD_profile_small.frame]
-        visiumHD = model.Visium2HD(HDprofile=self.visiumHD_profile_large, mode='manual',center=center)
-        model.set_target_VisiumHD(visiumHD)
-
-        # run super resolve model
-        Model_temp = Path(self.output_path/f"bin_{bin_size:03}um/{model_name}_workspace")
-        now = datetime.now()
-        format_time = now.strftime("%Y-%m-%d_%H-%M-%S")
-        Model_dir = Model_temp/f"{format_time}_{bin_size:03}"
-        model.save_input(Model_dir)
-        run_time = run_command_in_conda_env(
-            CONDA_ENV[model_name],
-            f'{TOOL_SCRIPTS[model_name]} {Model_dir.resolve()}/',
+        Visium2HD_pipeline.SRmodel.tissue_mask(mask_image_path=output_path/"mask.png")
+        Pipeline.preprocessing(Visium2HD_pipeline.SRmodel, {
+                'n_top_hvg': preprocess_config['n_top_hvg'], 
+                'min_counts': preprocess_config['min_counts'],
+                'mask_image_path': output_path/"mask.png"
+            }
         )
-        model.update_params(run_time=run_time)
-        model.load_output(Model_dir)
+        center = [ i/2 for i in dataset_config["source_profile"].frame]
+        visiumHD = Visium2HD_pipeline.SRmodel.Visium2HD(
+            HDprofile=dataset_config["target_porfile"],
+            mode='manual',
+            center=center
+        )
+        Visium2HD_pipeline.SRmodel.set_target_VisiumHD(visiumHD)
+        Visium2HD_pipeline.running(super_pixel_size=target_bin_size)
 
-        ####### save ########
-        model.to_VisiumHD()
-        visiumHD.to_anndata().write_h5ad(Model_temp/"superHD.h5ad")
+        Visium2HD_pipeline.SRmodel.to_VisiumHD()
+        Pipeline.saving(visiumHD, "h5ad", model_config["temp_dir"])
 
 def rebinning(prefix:Path, source_image_path:Path, output_path:Path, bin_size, n_top_genes=2000, min_counts=10):
     prefix = Path(prefix)
@@ -163,30 +169,53 @@ def rebinning(prefix:Path, source_image_path:Path, output_path:Path, bin_size, n
 
 def main():
     metadata = pd.read_csv("benchmark/metadata.tsv", sep="\t")
+    dataset_configs = {}
     for i in range(len(metadata)):
         id = metadata.loc[i,"Sample ID"]
-        rebinning(
-            prefix = f"benchmark/data/{id}/binned_outputs",
-            source_image_path = f"benchmark/data/{id}/{id}_tissue_image.tif",
-            output_path = f"benchmark/data/{id}",
-            bin_size=16
-        )
-        benchmarker = Benchmark(
-            input_path=f"benchmark/data/{id}/binned_outputs/square_002um",
-            output_path=f"benchmark/data/{id}",
-            source_image_path=f"benchmark/data/{id}/{id}_tissue_image.tif"
-        )
-        benchmarker.preprocess(
-            slide_serial=4,
-            n_top_genes=2000,
-            min_counts=10
-        )
-        for model_name in ["TESLA", "iStar"]:
-            benchmarker.run(
-                model_name=model_name,
-                mask_image_path=f"benchmark/data/{id}/mask.png",
-                bin_size=16
-            )
+        dataset_configs[id] = {
+            "id": id,
+            "input_path": f"benchmark/data/{id}/binned_outputs/square_002um",
+            "output_path": f"benchmark/data/{id}",
+            "source_image_path": f"benchmark/data/{id}/{id}_tissue_image.tif"
+        }
+
+    benchmarker = Benchmark(target_bin_size=8)
+    benchmarker.set_datasets(**dataset_configs)
+
+    benchmark_models = ["iStar", "TESLA"]
+    model_configs = {}
+    for model in benchmark_models:
+        model_configs[model] = global_configs.get(model, {})
+    
+    benchmarker.set_models(**model_configs)        
+    benchmarker.preprocessHD(preprocess_config=DEFAULT_PREPROCESS, num_works=2)
+    benchmarker.running(num_works=2)
+
+    # for model in SUPPORTED_TOOLS:
+    #     model_configs[model] = global_configs.get(model, {})
+
+    #     rebinning(
+    #         prefix = f"benchmark/data/{id}/binned_outputs",
+    #         source_image_path = f"benchmark/data/{id}/{id}_tissue_image.tif",
+    #         output_path = f"benchmark/data/{id}",
+    #         bin_size=16
+    #     )
+    #     benchmarker = Benchmark(
+    #         input_path=f"benchmark/data/{id}/binned_outputs/square_002um",
+    #         output_path=f"benchmark/data/{id}",
+    #         source_image_path=f"benchmark/data/{id}/{id}_tissue_image.tif"
+    #     )
+    #     benchmarker.preprocess(
+    #         slide_serial=4,
+    #         n_top_genes=2000,
+    #         min_counts=10
+    #     )
+    #     for model_name in ["TESLA", "iStar"]:
+    #         benchmarker.run(
+    #             model_name=model_name,
+    #             mask_image_path=f"benchmark/data/{id}/mask.png",
+    #             bin_size=16
+    #         )
 
 if __name__ == "__main__":
     main()

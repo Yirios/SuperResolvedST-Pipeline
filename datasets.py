@@ -162,9 +162,10 @@ class rawData:
         file = path/'filtered_feature_bc_matrix.h5'
         write_10X_h5(self.adata, file, self.metadata)
 
-    def _save_images(self, path):
+    def _save_images(self, path, save_full_image=True):
         # raw image
-        tifffile.imwrite(path/"image.tif", self.image, bigtiff=True)
+        if save_full_image:
+            tifffile.imwrite(path/"image.tif", self.image, bigtiff=True)
         # spatial image
         lowres_image = image_resize(self.image, scalef=self.scaleF["tissue_lowres_scalef"])
         ii.imsave(path/"spatial/tissue_lowres_image.png", lowres_image)
@@ -172,11 +173,11 @@ class rawData:
         ii.imsave(path/"spatial/tissue_hires_image.png", hires_image)
 
     @timer
-    def save(self, path:Path):
+    def save(self, path:Path, save_full_image=True):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         (path/"spatial").mkdir(parents=True, exist_ok=True)
-        self._save_images(path)
+        self._save_images(path, save_full_image)
         self._save_feature_bc_matrix(path)
         self._save_scalefactors(path)
         self._save_location(path)
