@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+config_file="$(dirname $(readlink -f "$0"))/my-config.toml"
+patch_size=768
+# Default parameters
+cuda_id=0
+batch_size=3
+epochs=200000
+learning_rate=0.0003
+
 function show_help() {
     echo "Usage: $(basename "$0") [OPTIONS] /FULL/PATH/TO/WORKSPACE"
     echo
@@ -8,10 +16,11 @@ function show_help() {
     echo "  /FULL/PATH/TO/WORKSPACE        Required working directory containing input data generated from pipeline"
     echo
     echo "Options:"
-    echo "  -d, --GPU_id ID          Select GPU device ID (default: 0)"
-    echo "  -e, --epochs NUM         Set number of training epochs (default: 200000)"
-    echo "  -b, --batch_size SIZE    Set batch size (default: 3)"
-    echo "  -r, --learning_rate LR   Set learning rate (default: 0.0003)"
+    echo "  -g, --GPU_id ID          Select GPU device ID (default: ${cuda_id})"
+    echo "  -e, --epochs NUM         Set number of training epochs (default: ${epochs})"
+    echo "  -b, --batch_size SIZE    Set batch size (default: ${batch_size})"
+    # echo "  -p, --patch_size SIZE    Set patch size (default: ${patch_size})"
+    echo "  -r, --learning_rate LR   Set learning rate (default: ${learning_rate})"
     echo "  -c, --clean              Clean intermediate files after processing"
     echo "  -h, --help               Show this help message"
     echo
@@ -27,17 +36,9 @@ function show_help() {
     exit 0
 }
 
-config_file="$(dirname $(readlink -f "$0"))/my-config.toml"
-patch_size=768
-# Default parameters
-device=0
-batch_size=3
-epochs=200000
-learning_rate=0.0003
-
 # Parse command line arguments
 params=$(getopt \
-    -o d:e:b:r:ch \
+    -o g:e:b:r:ch \
     --long GPU_id:,epochs:,batch_size:,learning_rate:,clean,help \
     -n "$(basename "$0")" -- "$@") || { show_help; exit 1; }
 
@@ -45,8 +46,8 @@ eval set -- "$params"
 
 while true; do
     case "$1" in
-        -d|--GPU_id)
-            device="$2"
+        -g|--GPU_id)
+            cuda_id="$2"
             shift 2 ;;
         -e|--epochs)
             epochs="$2"
@@ -81,7 +82,7 @@ prefix="$1"
 
 cp ${config_file} ${prefix}/config.toml
 sed -i "/data = \"section1\/data.h5\"/s|data = \"section1/data.h5\"|data = \"${prefix}/data/data.h5\"|" ${prefix}/config.toml
-sed -i "s|device =|device = $device|" ${prefix}/config.toml
+export CUDA_VISIBLE_DEVICES=$cuda_id
 sed -i "s|batch_size =|batch_size = $batch_size|" ${prefix}/config.toml
 sed -i "s|epochs =|epochs = $epochs|" ${prefix}/config.toml
 sed -i "s|learning_rate =|learning_rate = $learning_rate|" ${prefix}/config.toml
