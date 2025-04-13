@@ -101,19 +101,34 @@ class Benchmark:
             pool.starmap(Benchmark.preprocessHD_single, tasks)
         
     def running(self, num_works=1):
-
-        tasks = []
-        for dataset, model in product(self.datasets.items(), self.models.items()):
-            tasks.append((self.target_bin_size, dataset, self.preprocess_config, model))
-        with multiprocessing.Pool(processes=num_works) as pool:
-            pool.starmap(Benchmark.run_single, tasks)
+        def init_process(id_queue):
+            global process_id
+            process_id = id_queue.get()
+        
+        with multiprocessing.Manager() as manager:
+            id_queue = manager.Queue()
+            for pid in range(num_works):
+                id_queue.put(pid)
+            
+            tasks = []
+            for dataset, model in product(self.datasets.items(), self.models.items()):
+                tasks.append((self.target_bin_size, dataset, self.preprocess_config, model))
+            with multiprocessing.Pool(
+                processes=num_works,
+                initializer=init_process,
+                initargs=(id_queue,)
+            ) as pool:
+                pool.starmap(Benchmark.run_single, tasks)
 
     def run_single(target_bin_size, dataset, preprocess_config, model):
+        global process_id
         model_name, model_config = model
         dataset_id, dataset_config = dataset
 
         output_path = dataset_config["output_path"]
         model_config["temp_dir"] = output_path/f"bin_{target_bin_size:03}um/{model_name}_workspace"
+        if model_name in ["iStar", "xfuse"]:
+            model_config["model_params"]["GPU_id"] = process_id
         Visium2HD_pipeline = Pipeline(model_name, model_config)
         Visium2HD_pipeline.SRmodel.load(
             path = output_path/"Pseudo_Visium",
@@ -182,13 +197,14 @@ def main():
     benchmarker = Benchmark(target_bin_size=8)
     benchmarker.set_datasets(**dataset_configs)
 
-    benchmark_models = ["iStar", "TESLA"]
+    benchmark_models = ["iStar"]
     model_configs = {}
     for model in benchmark_models:
         model_configs[model] = global_configs.get(model, {})
     
     benchmarker.set_models(**model_configs)        
-    benchmarker.preprocessHD(preprocess_config=DEFAULT_PREPROCESS, num_works=2)
+    # benchmarker.preprocessHD(preprocess_config=DEFAULT_PREPROCESS, num_works=2)
+    benchmarker.preprocess_config=DEFAULT_PREPROCESS
     benchmarker.running(num_works=2)
 
     # for model in SUPPORTED_TOOLS:
