@@ -25,6 +25,17 @@ python analyzer.py Visium2HD \
     --model iStar
 ```
 ### Benchmark
+|dataset                 |xfuse           |iStar           |TESLA           |ImSpiRE         |
+|------------------------|----------------|----------------|----------------|----------------|
+|Mouse Brain Fresh Frozen|88.4            |88.1            |76.2            |21.4            |
+|Mouse Brain Fixed Frozen|92.5            |92.3            |84.0            |20.0            |
+|Mouse Brain             |93.7            |93.5            |87.1            |19.0            |
+|Mouse Embryo            |89.3            |89.2            |76.8            |17.5            |
+|Mouse Small Intestine   |91.8            |91.5            |83.6            |20.1            |
+|Mouse Kidney            |90.7            |90.7            |79.9            |-               |
+|Human Kidney FFPE       |95.7            |95.6            |91.5            |-               |
+|Human Colon Cancer P5   |90.8            |90.8            |79.2            |-               |
+|Human Colon Normal P5   |92.9            |92.7            |86.6            |17.0            |
 
 ### Tutorials and Analyses Pipeline
 
